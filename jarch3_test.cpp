@@ -115,6 +115,7 @@ public:
 	virtual void		clear_sense();
 	virtual void		clear_data();
 	virtual int		do_scsi(int direction=0,size_t data_length=0);
+	virtual void		dump_sense(FILE *fp=NULL);
 public:
 	int			fd;
 	string			device;
@@ -266,6 +267,20 @@ void Jarch3Device::clear_command() {
 
 size_t Jarch3Device::read_buffer_data_length() {
 	return data_length;
+}
+
+void Jarch3Device::dump_sense(FILE *fp) {
+	int x;
+
+	if (fp == NULL) fp = stderr;
+	if (sense_length == 0) {
+		fprintf(fp,"No sense data\n");
+		return;
+	}
+
+	fprintf(fp,"Sense data[%u]: ",(unsigned int)sense_length);
+	for (x=0;x < (int)sense_length;x++) fprintf(fp,"%02x ",sense[x]);
+	fprintf(fp,"\n");
 }
 
 int Jarch3Device::do_scsi(int UNUSED direction,size_t UNUSED data_length) {
@@ -450,12 +465,18 @@ int Jarch3Device_Linux_SG::do_scsi(int direction,size_t data_length) {
 	r = ioctl(fd,SG_IO,(void*)(&sg));
 
 	sense_length = sg.sb_len_wr;
-	if (sg.driver_status != 0)
+	if (sg.driver_status != 0) {
 		fprintf(stderr,"Linux_SG: SG_IO driver_status=0x%lx\n",(unsigned long)sg.driver_status);
-	if (sg.masked_status != 0)
+		if (r == 0) { r = -1; errno = EIO; }
+	}
+	if (sg.masked_status != 0) {
 		fprintf(stderr,"Linux_SG: SG_IO masked_status=0x%lx\n",(unsigned long)sg.masked_status);
-	if (sg.host_status != 0)
+		if (r == 0) { r = -1; errno = EIO; }
+	}
+	if (sg.host_status != 0) {
 		fprintf(stderr,"Linux_SG: SG_IO host_status=0x%lx\n",(unsigned long)sg.host_status);
+		if (r == 0) { r = -1; errno = EIO; }
+	}
 	if ((sg.info & SG_INFO_OK_MASK) != SG_INFO_OK) {
 		fprintf(stderr,"Linux_SG: SG_IO abnormal sense data\n");
 		sense_length = 0;
@@ -504,9 +525,9 @@ static void help() {
 	fprintf(stderr,"    retract           Retract CD-ROM tray\n");		/* DONE */
 	fprintf(stderr,"    spinup            Spin up CD-ROM drive\n");		/* DONE */
 	fprintf(stderr,"    spindown          Spin down CD-ROM drive\n");	/* DONE */
-	fprintf(stderr,"    lock              Lock CD-ROM door\n");
-	fprintf(stderr,"    unlock            Unlock CD-ROM door\n");
-	fprintf(stderr,"    test-unit-ready   Test unit ready\n");
+	fprintf(stderr,"    lock              Lock CD-ROM door\n");		/* DONE */
+	fprintf(stderr,"    unlock            Unlock CD-ROM door\n");		/* DONE */
+	fprintf(stderr,"    test-unit-ready   Test unit ready\n");		/* DONE */
 	fprintf(stderr,"\n");
 	fprintf(stderr,"Driver: linux_sg\n");
 	fprintf(stderr,"   Valid devices are of the form /dev/sr0, /dev/sr1, etc...\n");
@@ -578,6 +599,7 @@ bool test_unit_ready(Jarch3Device *dev) {
 	r = dev->do_scsi();
 	if (r < 0) {
 		fprintf(stderr,"%s: do_scsi() failed, %s\n",__func__,strerror(errno));
+		dev->dump_sense(stderr);
 		return false;
 	}
 
@@ -593,6 +615,26 @@ bool start_stop_unit(Jarch3Device *dev,unsigned char ctl/*[1:0] = LoEj, Start*/)
 		p[4] = ctl;		/* LoEj, Start */
 		if (dev->do_scsi() < 0) {
 			printf("START STOP UNIT failed\n");
+			dev->dump_sense(stdout);
+			return false;
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
+bool prevent_allow_medium_removal(Jarch3Device *dev,unsigned char ctl) {
+	unsigned char *p;
+
+	p = dev->write_command(6);
+	if (p != NULL) {
+		p[0] = 0x1E;		/* PREVENT ALLOW MEDIUM REMOVAL */
+		p[4] = ctl;		/* LoEj, Start */
+		if (dev->do_scsi() < 0) {
+			printf("PREVENT ALLOW MEDIUM REMOVAL failed\n");
+			dev->dump_sense(stdout);
 			return false;
 		}
 
@@ -660,6 +702,20 @@ int main(int argc,char **argv) {
 
 		if (start_stop_unit(device,0x00)) printf("START STOP UNIT OK\n");
 		else printf("START STOP UNIT failed\n");
+	}
+	else if (config.command == "lock") {
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		else printf("Test unit ready failed\n");
+
+		if (prevent_allow_medium_removal(device,0x01)) printf("PREVENT ALLOW MEDIUM REMOVAL OK\n");
+		else printf("PREVENT ALLOW MEDIUM REMOVAL failed\n");
+	}
+	else if (config.command == "unlock") {
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		else printf("Test unit ready failed\n");
+
+		if (prevent_allow_medium_removal(device,0x00)) printf("PREVENT ALLOW MEDIUM REMOVAL OK\n");
+		else printf("PREVENT ALLOW MEDIUM REMOVAL failed\n");
 	}
 
 	/* we're finished with the device */
