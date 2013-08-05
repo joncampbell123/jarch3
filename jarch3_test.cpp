@@ -62,6 +62,12 @@ public:
 
 class Jarch3Device {
 public:
+	enum {
+		DirNone=0,
+		DirToHost,		/* aka "reading" */
+		DirToDevice		/* aka "writing" */
+	};
+public:
 				Jarch3Device(const char *dev,Jarch3Driver *drv,Jarch3Configuration UNUSED *cfg);
 	virtual			~Jarch3Device();
 public:
@@ -97,10 +103,31 @@ public:
 									   issuing a read, and then assuming that
 									   any nonzero portion of the buffer represents
 									   the actual residual data. */
+
+	virtual unsigned char*	read_buffer(size_t len);
+	virtual size_t		read_buffer_length();
+	virtual size_t		read_buffer_data_length();
+	virtual unsigned char*	write_command(size_t len);
+	virtual size_t		write_command_length();
+	virtual unsigned char*	read_sense(size_t len);
+	virtual size_t		read_sense_length();
+	virtual void		clear_command();
+	virtual void		clear_sense();
+	virtual void		clear_data();
+	virtual int		do_scsi(int direction=0,size_t data_length=0);
 public:
 	int			fd;
 	string			device;
 	Jarch3Driver*		driver;
+
+	unsigned char		sense[256];
+	size_t			sense_length;
+
+	unsigned char		cmd[256];
+	size_t			cmd_length;
+
+	int			timeout;
+	size_t			data_length;
 public:
 	virtual int		addref();
 	virtual int		release();	/* NTS: upon refcount == 0, will auto-delete itself */
@@ -120,6 +147,9 @@ public:
 	virtual bool		can_provide_residual();
 	virtual bool		can_buffer_show_partial_reads();
 	virtual bool		can_write_buffer();
+	virtual unsigned char*	read_buffer(size_t len);
+	virtual size_t		read_buffer_length();
+	virtual int		do_scsi(int direction=0,size_t data_length=0);
 public:
 	int			reserved_size;
 	void*			reserved_mmap;
@@ -142,6 +172,10 @@ void Jarch3Configuration::reset() {
 
 /*===================== empty base device ==================*/
 Jarch3Device::Jarch3Device(const char *dev,Jarch3Driver *drv,Jarch3Configuration UNUSED *cfg) {
+	timeout = -1;
+	cmd_length = 0;
+	data_length = 0;
+	sense_length = 0;
 	no_mmap = cfg->no_mmap;
 	driver = drv;
 	driver->addref();
@@ -189,6 +223,54 @@ bool Jarch3Device::can_buffer_show_partial_reads() {
 
 bool Jarch3Device::can_write_buffer() {
 	return false;
+}
+
+unsigned char* Jarch3Device::read_buffer(size_t UNUSED len) {
+	return NULL;
+}
+
+size_t Jarch3Device::read_buffer_length() {
+	return 0;
+}
+
+unsigned char* Jarch3Device::write_command(size_t UNUSED len) {
+	if (len > sizeof(cmd)) return NULL;
+	cmd_length = len;
+	return cmd;
+}
+
+size_t Jarch3Device::write_command_length() {
+	return cmd_length;
+}
+
+unsigned char* Jarch3Device::read_sense(size_t UNUSED len) {
+	if (sense_length == 0 || len > sense_length) return NULL;
+	return sense;
+}
+
+size_t Jarch3Device::read_sense_length() {
+	return sense_length;
+}
+
+void Jarch3Device::clear_data() {
+	data_length = 0;
+}
+
+void Jarch3Device::clear_sense() {
+	sense_length = 0;
+}
+
+void Jarch3Device::clear_command() {
+	cmd_length = 0;
+}
+
+size_t Jarch3Device::read_buffer_data_length() {
+	return data_length;
+}
+
+int Jarch3Device::do_scsi(int UNUSED direction,size_t UNUSED data_length) {
+	errno = ENOSYS;
+	return -1;
 }
 
 /*===================== empty base driver ==================*/
@@ -322,6 +404,72 @@ bool Jarch3Device_Linux_SG::can_write_buffer() {
 	return (reserved_mmap != NULL)?true:false; /* yes, IF we are using mmap I/O */
 }
 
+unsigned char* Jarch3Device_Linux_SG::read_buffer(size_t len) {
+	if (len > (size_t)reserved_size) return NULL;
+	/* TODO: Return user-allocated buffer if NOT memory-mapped */
+	return (unsigned char*)reserved_mmap;
+}
+
+size_t Jarch3Device_Linux_SG::read_buffer_length() {
+	return reserved_size;
+}
+
+int Jarch3Device_Linux_SG::do_scsi(int direction,size_t data_length) {
+	struct sg_io_hdr sg;
+	int r;
+
+	if (fd < 0) {
+		errno = EBADF;
+		return -1;
+	}
+	if (cmd_length == 0) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	memset(&sg,0,sizeof(sg));
+	memset(sense,0,sizeof(sense));
+	sense_length = 0;
+
+	sg.interface_id =			'S';
+	sg.cmd_len =				cmd_length;
+	sg.cmdp =				cmd;
+	sg.mx_sb_len =				sizeof(sense);
+	sg.sbp =				sense;
+	sg.dxfer_len =				(direction != DirNone) ? data_length : 0;
+	sg.dxferp =				(direction != DirNone) ? (reserved_mmap != NULL ? reserved_mmap : NULL/*TODO user buffer*/) : NULL;
+	sg.timeout =				(timeout >= 0) ? timeout : 30000;
+	/* NTS: OK Linux devs, here's a good example what NOT to do: Don't ever tell me I can set SG_FLAG_MMAP_IO to do the mmap I/O
+	 *      but then let me find out the hard way the Linux kernel headers don't actually have such a flag. That serves only to
+	 *      piss me the fuck off. --J.C. */
+	sg.flags =				(reserved_mmap != NULL ? SG_FLAG_NO_DXFER : SG_FLAG_DIRECT_IO);
+	if (direction == DirToHost)		sg.dxfer_direction = SG_DXFER_FROM_DEV;
+	else if (direction == DirToDevice)	sg.dxfer_direction = SG_DXFER_TO_DEV;
+	else					sg.dxfer_direction = SG_DXFER_NONE;
+
+	r = ioctl(fd,SG_IO,(void*)(&sg));
+
+	sense_length = sg.sb_len_wr;
+	if (sg.driver_status != 0)
+		fprintf(stderr,"Linux_SG: SG_IO driver_status=0x%lx\n",(unsigned long)sg.driver_status);
+	if (sg.masked_status != 0)
+		fprintf(stderr,"Linux_SG: SG_IO masked_status=0x%lx\n",(unsigned long)sg.masked_status);
+	if (sg.host_status != 0)
+		fprintf(stderr,"Linux_SG: SG_IO host_status=0x%lx\n",(unsigned long)sg.host_status);
+	if ((sg.info & SG_INFO_OK_MASK) != SG_INFO_OK) {
+		fprintf(stderr,"Linux_SG: SG_IO abnormal sense data\n");
+		sense_length = 0;
+	}
+
+	if ((size_t)sg.resid > (size_t)sg.dxfer_len) {
+		fprintf(stderr,"Linux_SG: SG_IO residual > transfer length\n");
+		sg.resid = sg.dxfer_len;
+	}
+
+	data_length = sg.dxfer_len - sg.resid;
+	return r;
+}
+
 /*===================== Driver dispatch ======================*/
 /* given driver name and device, locate/load driver, addref, and return */
 Jarch3Driver *Jarch3GetDriver(string &driver,string UNUSED &device,Jarch3Configuration UNUSED *cfg) {
@@ -352,10 +500,10 @@ static void help() {
 	fprintf(stderr,"    -no-mmap          Do not use memory-mapped I/O (device driver opt)\n");
 	fprintf(stderr,"\n");
 	fprintf(stderr,"Commands:\n");
-	fprintf(stderr,"    eject             Eject CD-ROM tray\n");
-	fprintf(stderr,"    retract           Retract CD-ROM tray\n");
-	fprintf(stderr,"    spinup            Spin up CD-ROM drive\n");
-	fprintf(stderr,"    spindown          Spin down CD-ROM drive\n");
+	fprintf(stderr,"    eject             Eject CD-ROM tray\n");		/* DONE */
+	fprintf(stderr,"    retract           Retract CD-ROM tray\n");		/* DONE */
+	fprintf(stderr,"    spinup            Spin up CD-ROM drive\n");		/* DONE */
+	fprintf(stderr,"    spindown          Spin down CD-ROM drive\n");	/* DONE */
 	fprintf(stderr,"    lock              Lock CD-ROM door\n");
 	fprintf(stderr,"    unlock            Unlock CD-ROM door\n");
 	fprintf(stderr,"    test-unit-ready   Test unit ready\n");
@@ -416,6 +564,44 @@ static int parse_argv(Jarch3Configuration &cfg,int argc,char **argv) {
 /* TODO: Move elsewhere */
 static const char *yesno_str[2] = {"No","Yes"};
 
+bool test_unit_ready(Jarch3Device *dev) {
+	unsigned char *p;
+	int r;
+
+	p = dev->write_command(6);	/* TEST UNIT READY is 6 bytes long */
+	if (p == NULL) {
+		fprintf(stderr,"%s: cannot obtain command buffer\n",__func__);
+		return false;
+	}
+
+	memset(p,0,6);		/* set all to zero. TEST UNIT READY command byte is also zero */
+	r = dev->do_scsi();
+	if (r < 0) {
+		fprintf(stderr,"%s: do_scsi() failed, %s\n",__func__,strerror(errno));
+		return false;
+	}
+
+	return true;
+}
+
+bool start_stop_unit(Jarch3Device *dev,unsigned char ctl/*[1:0] = LoEj, Start*/) {
+	unsigned char *p;
+
+	p = dev->write_command(6);
+	if (p != NULL) {
+		p[0] = 0x1B;		/* START STOP UNIT */
+		p[4] = ctl;		/* LoEj, Start */
+		if (dev->do_scsi() < 0) {
+			printf("START STOP UNIT failed\n");
+			return false;
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
 int main(int argc,char **argv) {
 	Jarch3Configuration config;
 	Jarch3Driver *driver = NULL;
@@ -442,6 +628,39 @@ int main(int argc,char **argv) {
 	fprintf(stderr,"    can_provide_residual:            %s\n",yesno_str[device->can_provide_residual()?1:0]);
 	fprintf(stderr,"    can_buffer_show_partial_reads:   %s\n",yesno_str[device->can_buffer_show_partial_reads()?1:0]);
 	fprintf(stderr,"    can_write_buffer:                %s\n",yesno_str[device->can_write_buffer()?1:0]);
+
+	if (config.command == "test-unit-ready") {
+		if (test_unit_ready(device)) printf("Test OK\n");
+		else printf("Test failed\n");
+	}
+	else if (config.command == "eject") {
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		else printf("Test unit ready failed\n");
+
+		if (start_stop_unit(device,0x02)) printf("START STOP UNIT OK\n");
+		else printf("START STOP UNIT failed\n");
+	}
+	else if (config.command == "retract") {
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		else printf("Test unit ready failed\n");
+
+		if (start_stop_unit(device,0x03)) printf("START STOP UNIT OK\n");
+		else printf("START STOP UNIT failed\n");
+	}
+	else if (config.command == "spinup") {
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		else printf("Test unit ready failed\n");
+
+		if (start_stop_unit(device,0x01)) printf("START STOP UNIT OK\n");
+		else printf("START STOP UNIT failed\n");
+	}
+	else if (config.command == "spindown") {
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		else printf("Test unit ready failed\n");
+
+		if (start_stop_unit(device,0x00)) printf("START STOP UNIT OK\n");
+		else printf("START STOP UNIT failed\n");
+	}
 
 	/* we're finished with the device */
 	device->release(); device = NULL;
