@@ -5,6 +5,7 @@
 
 #include <sys/types.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <scsi/sg.h>
 #include <signal.h>
@@ -29,6 +30,8 @@ public:
 	string			driver;
 	string			device;
 	string			command;
+public:
+	bool			no_mmap;
 };
 
 class Jarch3Device;
@@ -59,7 +62,7 @@ public:
 
 class Jarch3Device {
 public:
-				Jarch3Device(const char *dev,Jarch3Driver *drv);
+				Jarch3Device(const char *dev,Jarch3Driver *drv,Jarch3Configuration UNUSED *cfg);
 	virtual			~Jarch3Device();
 public:
 	virtual void		close();
@@ -72,14 +75,20 @@ public:
 	virtual int		addref();
 	virtual int		release();	/* NTS: upon refcount == 0, will auto-delete itself */
 	volatile int		refcount;
+public:
+	bool			no_mmap;
 };
 
 class Jarch3Device_Linux_SG : public Jarch3Device {
 public:
-				Jarch3Device_Linux_SG(const char *dev,Jarch3Driver *drv);
+				Jarch3Device_Linux_SG(const char *dev,Jarch3Driver *drv,Jarch3Configuration UNUSED *cfg);
 	virtual			~Jarch3Device_Linux_SG();
 public:
 	virtual bool		open();
+	virtual void		close();
+public:
+	int			reserved_size;
+	void*			reserved_mmap;
 };
 
 /*===================== config class ==================*/
@@ -94,10 +103,12 @@ void Jarch3Configuration::reset() {
 	driver = "linux_sg";
 	device = "/dev/dvd";
 	command.clear();
+	no_mmap = false;
 }
 
 /*===================== empty base device ==================*/
-Jarch3Device::Jarch3Device(const char *dev,Jarch3Driver *drv) {
+Jarch3Device::Jarch3Device(const char *dev,Jarch3Driver *drv,Jarch3Configuration UNUSED *cfg) {
+	no_mmap = cfg->no_mmap;
 	driver = drv;
 	driver->addref();
 	driver->dev_refcount++;
@@ -193,7 +204,7 @@ Jarch3Device *Jarch3Driver_Linux_SG::open(const char *dev,Jarch3Configuration UN
 		return NULL;
 	}
 
-	devobj = new Jarch3Device_Linux_SG(dev,this);
+	devobj = new Jarch3Device_Linux_SG(dev,this,cfg);
 	if (devobj == NULL) return NULL;
 	devobj->addref();
 
@@ -208,10 +219,17 @@ Jarch3Device *Jarch3Driver_Linux_SG::open(const char *dev,Jarch3Configuration UN
 }
 
 /*====================== Linux SGIO device ===================*/
-Jarch3Device_Linux_SG::Jarch3Device_Linux_SG(const char *dev,Jarch3Driver *drv) : Jarch3Device(dev,drv) {
+Jarch3Device_Linux_SG::Jarch3Device_Linux_SG(const char *dev,Jarch3Driver *drv,Jarch3Configuration UNUSED *cfg) : Jarch3Device(dev,drv,cfg) {
+	reserved_mmap = NULL;
+	reserved_size = 0;
 }
 
 Jarch3Device_Linux_SG::~Jarch3Device_Linux_SG() {
+}
+
+void Jarch3Device_Linux_SG::close() {
+	if (reserved_mmap != NULL) munmap(reserved_mmap,reserved_size);
+	Jarch3Device::close();
 }
 
 bool Jarch3Device_Linux_SG::open() {
@@ -221,6 +239,26 @@ bool Jarch3Device_Linux_SG::open() {
 	if (fd < 0) {
 		fprintf(stderr,"Linux_SG: Failed to open %s, %s\n",device.c_str(),strerror(errno));
 		return false;
+	}
+
+	reserved_size = 65536;
+	ioctl(fd,SG_SET_RESERVED_SIZE,&reserved_size);
+	ioctl(fd,SG_GET_RESERVED_SIZE,&reserved_size);
+	fprintf(stderr,"Linux_SG: Reserved size set to %u\n",reserved_size);
+
+	if (no_mmap) {
+		fprintf(stderr,"Linux_SG: Not using memory-mapping\n");
+		reserved_mmap = NULL;
+	}
+	else {
+		reserved_mmap = mmap(NULL,reserved_size,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
+		if (reserved_mmap == MAP_FAILED) {
+			fprintf(stderr,"Linux_SG: Unable to mmap the reserve.\n");
+			reserved_mmap = NULL;
+		}
+		else {
+			fprintf(stderr,"Linux_SG: Successfully memory-mapped the SGIO reserve buffer\n");
+		}
 	}
 
 	return true;
@@ -252,6 +290,8 @@ static void help() {
 	fprintf(stderr,"    -dev <device>\n");
 	fprintf(stderr,"    -drv <driver>\n");
 	fprintf(stderr,"    -c <command>\n");
+	fprintf(stderr,"\n");
+	fprintf(stderr,"    -no-mmap          Do not use memory-mapped I/O (device driver opt)\n");
 	fprintf(stderr,"\n");
 	fprintf(stderr,"Commands:\n");
 	fprintf(stderr,"    eject             Eject CD-ROM tray\n");
@@ -291,6 +331,9 @@ static int parse_argv(Jarch3Configuration &cfg,int argc,char **argv) {
 			else if (!strcmp(a,"c")) {
 				if (i >= argc) return 1;
 				cfg.command = argv[i++];
+			}
+			else if (!strcmp(a,"no-mmap")) {
+				cfg.no_mmap = true;
 			}
 			else {
 				fprintf(stderr,"Unknown switch %s\n",a);
