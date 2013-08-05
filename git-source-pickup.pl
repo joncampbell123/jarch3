@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 
-$project = 'isp-utils-v4';
+$project = 'jarch3';
 
 $branch = `git branch | grep '^\*' | sed -e 's/^\* //'`; chomp $branch;
 $branchfname = "-branch-$branch" if $branch ne "";
