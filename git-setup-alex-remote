@@ -1,0 +1,4 @@
+#!/bin/bash
+git remote add alex ssh://git@firewall.impactstudiopro.com:52222/usr/apache/htdocs/~alex/git-repos/isp-utils-v4.git
+git fetch alex
+
