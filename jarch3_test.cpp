@@ -121,14 +121,16 @@ public:
 	string			device;
 	Jarch3Driver*		driver;
 
-	unsigned char		sense[256];
+	unsigned char		sense[128];
 	size_t			sense_length;
 
-	unsigned char		cmd[256];
+	unsigned char		cmd[32];
 	size_t			cmd_length;
 
 	int			timeout;
 	size_t			data_length;
+
+	bool			auto_fetch_sense;			/* default true: automatically fetch sense if system fails to provide it */
 public:
 	virtual int		addref();
 	virtual int		release();	/* NTS: upon refcount == 0, will auto-delete itself */
@@ -178,6 +180,7 @@ Jarch3Device::Jarch3Device(const char *dev,Jarch3Driver *drv,Jarch3Configuration
 	data_length = 0;
 	sense_length = 0;
 	no_mmap = cfg->no_mmap;
+	auto_fetch_sense = true;
 	driver = drv;
 	driver->addref();
 	driver->dev_refcount++;
@@ -452,7 +455,7 @@ int Jarch3Device_Linux_SG::do_scsi(int direction,size_t data_length) {
 	sg.mx_sb_len =				sizeof(sense);
 	sg.sbp =				sense;
 	sg.dxfer_len =				(direction != DirNone) ? data_length : 0;
-	sg.dxferp =				(direction != DirNone) ? (reserved_mmap != NULL ? reserved_mmap : NULL/*TODO user buffer*/) : NULL;
+	sg.dxferp =				(direction != DirNone) ? (reserved_mmap != NULL ? NULL/*TODO*/ : NULL/*TODO user buffer*/) : NULL;
 	sg.timeout =				(timeout >= 0) ? timeout : 30000;
 	/* NTS: OK Linux devs, here's a good example what NOT to do: Don't ever tell me I can set SG_FLAG_MMAP_IO to do the mmap I/O
 	 *      but then let me find out the hard way the Linux kernel headers don't actually have such a flag. That serves only to
@@ -466,28 +469,52 @@ int Jarch3Device_Linux_SG::do_scsi(int direction,size_t data_length) {
 
 	sense_length = sg.sb_len_wr;
 	if (sg.driver_status != 0) {
-		fprintf(stderr,"Linux_SG: SG_IO driver_status=0x%lx\n",(unsigned long)sg.driver_status);
+//		fprintf(stderr,"Linux_SG: SG_IO driver_status=0x%lx\n",(unsigned long)sg.driver_status);
 		if (r == 0) { r = -1; errno = EIO; }
 	}
 	if (sg.masked_status != 0) {
-		fprintf(stderr,"Linux_SG: SG_IO masked_status=0x%lx\n",(unsigned long)sg.masked_status);
+//		fprintf(stderr,"Linux_SG: SG_IO masked_status=0x%lx\n",(unsigned long)sg.masked_status);
 		if (r == 0) { r = -1; errno = EIO; }
 	}
 	if (sg.host_status != 0) {
-		fprintf(stderr,"Linux_SG: SG_IO host_status=0x%lx\n",(unsigned long)sg.host_status);
+//		fprintf(stderr,"Linux_SG: SG_IO host_status=0x%lx\n",(unsigned long)sg.host_status);
 		if (r == 0) { r = -1; errno = EIO; }
-	}
-	if ((sg.info & SG_INFO_OK_MASK) != SG_INFO_OK) {
-		fprintf(stderr,"Linux_SG: SG_IO abnormal sense data\n");
-		sense_length = 0;
 	}
 
 	if ((size_t)sg.resid > (size_t)sg.dxfer_len) {
 		fprintf(stderr,"Linux_SG: SG_IO residual > transfer length\n");
 		sg.resid = sg.dxfer_len;
 	}
-
 	data_length = sg.dxfer_len - sg.resid;
+
+	/* NTS: If a command is successful, the Linux SG_IO ioctl will NOT return sense data */
+	if (sense_length == 0 && auto_fetch_sense && r != 0) {
+		static const unsigned char sense_cmd[6] = {0x03,0x00,0x00,0x00,(unsigned char)sizeof(sense),(unsigned char)(sizeof(sense)>>8)};
+
+		fprintf(stderr,"Linux_SG: SG_IO did not provide sense. Requesting it now\n");
+
+		memset(&sg,0,sizeof(sg));
+		sg.interface_id =			'S';
+		sg.cmd_len =				sizeof(sense_cmd);
+		sg.cmdp =				(unsigned char*)sense_cmd;
+		sg.timeout =				30000;
+		sg.dxferp =				sense;
+		sg.dxfer_len =				sizeof(sense);
+		sg.dxfer_direction =			SG_DXFER_FROM_DEV;
+		sg.flags =				SG_FLAG_DIRECT_IO;
+
+		if (ioctl(fd,SG_IO,(void*)(&sg)) < 0) {
+			fprintf(stderr,"Linux_SG: SG_IO did not provide sense even when explicitly asked\n");
+		}
+		else if (sg.resid != 0) {
+			sense_length = sg.dxfer_len - sg.resid;
+		}
+		else {
+			sense_length = 7 + sense[7]; /* <- Is this right? */
+			if (sense_length > sizeof(sense)) sense_length = sizeof(sense);
+		}
+	}
+
 	return r;
 }
 
@@ -587,21 +614,54 @@ static const char *yesno_str[2] = {"No","Yes"};
 
 bool test_unit_ready(Jarch3Device *dev) {
 	unsigned char *p;
+	int last_rep=0;
 	int r;
 
-	p = dev->write_command(6);	/* TEST UNIT READY is 6 bytes long */
-	if (p == NULL) {
-		fprintf(stderr,"%s: cannot obtain command buffer\n",__func__);
-		return false;
-	}
+	do {
+		p = dev->write_command(6);	/* TEST UNIT READY is 6 bytes long */
+		if (p == NULL) {
+			fprintf(stderr,"%s: cannot obtain command buffer\n",__func__);
+			return false;
+		}
 
-	memset(p,0,6);		/* set all to zero. TEST UNIT READY command byte is also zero */
-	r = dev->do_scsi();
-	if (r < 0) {
-		fprintf(stderr,"%s: do_scsi() failed, %s\n",__func__,strerror(errno));
-		dev->dump_sense(stderr);
-		return false;
-	}
+		memset(p,0,6);		/* set all to zero. TEST UNIT READY command byte is also zero */
+		r = dev->do_scsi();
+		if (r < 0) {
+			p = dev->read_sense(14);
+			if (p != NULL) {
+				if ((p[2]&0xF) == 2 && p[12] == 0x3A) {
+					if (last_rep != 0x023A00) {
+						last_rep = 0x023A00;
+						fprintf(stderr,"Device reports medium not present. Insert media or CTRL+C now\n");
+					}
+					sleep(1);
+					continue;
+				}
+				if ((p[2]&0xF) == 2 && p[12] == 0x04 && p[13] == 0x01) {
+					if (last_rep != 0x020401) {
+						last_rep = 0x020401;
+						fprintf(stderr,"Device reports medium becoming available.\n");
+					}
+					usleep(250000);
+					continue;
+				}
+				if ((p[2]&0xF) == 6 && p[12] == 0x28 && p[13] == 0x00) {
+					if (last_rep != 0x062800) {
+						last_rep = 0x062800;
+						fprintf(stderr,"Device reports medium is ready.\n");
+					}
+					usleep(250000);
+					continue;
+				}
+			}
+
+			fprintf(stderr,"%s: do_scsi() failed, %s\n",__func__,strerror(errno));
+			dev->dump_sense(stderr);
+			return false;
+		}
+		
+		break;
+	} while (1);
 
 	return true;
 }
@@ -677,45 +737,27 @@ int main(int argc,char **argv) {
 	}
 	else if (config.command == "eject") {
 		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		else printf("Test unit ready failed\n");
-
 		if (start_stop_unit(device,0x02)) printf("START STOP UNIT OK\n");
-		else printf("START STOP UNIT failed\n");
 	}
 	else if (config.command == "retract") {
 		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		else printf("Test unit ready failed\n");
-
 		if (start_stop_unit(device,0x03)) printf("START STOP UNIT OK\n");
-		else printf("START STOP UNIT failed\n");
 	}
 	else if (config.command == "spinup") {
 		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		else printf("Test unit ready failed\n");
-
 		if (start_stop_unit(device,0x01)) printf("START STOP UNIT OK\n");
-		else printf("START STOP UNIT failed\n");
 	}
 	else if (config.command == "spindown") {
 		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		else printf("Test unit ready failed\n");
-
 		if (start_stop_unit(device,0x00)) printf("START STOP UNIT OK\n");
-		else printf("START STOP UNIT failed\n");
 	}
 	else if (config.command == "lock") {
 		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		else printf("Test unit ready failed\n");
-
 		if (prevent_allow_medium_removal(device,0x01)) printf("PREVENT ALLOW MEDIUM REMOVAL OK\n");
-		else printf("PREVENT ALLOW MEDIUM REMOVAL failed\n");
 	}
 	else if (config.command == "unlock") {
 		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		else printf("Test unit ready failed\n");
-
 		if (prevent_allow_medium_removal(device,0x00)) printf("PREVENT ALLOW MEDIUM REMOVAL OK\n");
-		else printf("PREVENT ALLOW MEDIUM REMOVAL failed\n");
 	}
 
 	/* we're finished with the device */
