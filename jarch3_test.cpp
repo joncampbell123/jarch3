@@ -67,6 +67,36 @@ public:
 public:
 	virtual void		close();
 	virtual bool		open();
+
+	virtual bool		can_provide_residual();			/* does the device provide a residual
+									   byte count i.e. how much LESS was
+									   returned compared to the full request.
+
+									   REASON: some parts of this code would
+									   like to know if bad sector reads returned
+									   any data, even if not the entire sector. */
+
+	virtual bool		can_buffer_show_partial_reads();	/* if a read was partial, not full,
+									   would the buffer reflect the partial
+									   contents on top of what was last there?
+									   or would the contents change entirely?
+									   
+									   REASON: Knowing that partial reads will
+									   leave behind the prior buffer contents
+									   is useful for detecting what exactly was
+									   read in case the driver does not provide
+									   residual byte count */
+
+	virtual bool		can_write_buffer();			/* does the driver allow us to write the
+									   buffer, and have the written contents
+									   remain where I/O does not overwrite?
+									   
+									   REASON: Some code might attempt to detect
+									   residual byte code (if not provided by
+									   the driver) by zeroing the buffer then
+									   issuing a read, and then assuming that
+									   any nonzero portion of the buffer represents
+									   the actual residual data. */
 public:
 	int			fd;
 	string			device;
@@ -86,6 +116,10 @@ public:
 public:
 	virtual bool		open();
 	virtual void		close();
+public:
+	virtual bool		can_provide_residual();
+	virtual bool		can_buffer_show_partial_reads();
+	virtual bool		can_write_buffer();
 public:
 	int			reserved_size;
 	void*			reserved_mmap;
@@ -143,6 +177,18 @@ int Jarch3Device::release() {
 	ret = --refcount;
 	if (ret == 0) delete this;
 	return ret;
+}
+
+bool Jarch3Device::can_provide_residual() {
+	return false;
+}
+
+bool Jarch3Device::can_buffer_show_partial_reads() {
+	return false;
+}
+
+bool Jarch3Device::can_write_buffer() {
+	return false;
 }
 
 /*===================== empty base driver ==================*/
@@ -264,6 +310,18 @@ bool Jarch3Device_Linux_SG::open() {
 	return true;
 }
 
+bool Jarch3Device_Linux_SG::can_provide_residual() {
+	return true;
+}
+
+bool Jarch3Device_Linux_SG::can_buffer_show_partial_reads() {
+	return true;
+}
+
+bool Jarch3Device_Linux_SG::can_write_buffer() {
+	return (reserved_mmap != NULL)?true:false; /* yes, IF we are using mmap I/O */
+}
+
 /*===================== Driver dispatch ======================*/
 /* given driver name and device, locate/load driver, addref, and return */
 Jarch3Driver *Jarch3GetDriver(string &driver,string UNUSED &device,Jarch3Configuration UNUSED *cfg) {
@@ -355,6 +413,9 @@ static int parse_argv(Jarch3Configuration &cfg,int argc,char **argv) {
 	return 0;
 }
 
+/* TODO: Move elsewhere */
+static const char *yesno_str[2] = {"No","Yes"};
+
 int main(int argc,char **argv) {
 	Jarch3Configuration config;
 	Jarch3Driver *driver = NULL;
@@ -376,6 +437,11 @@ int main(int argc,char **argv) {
 		fprintf(stderr,"Failed to open device %s\n",config.device.c_str());
 		return 1;
 	}
+
+	fprintf(stderr,"Opened device %s (driver %s) successfully\n",config.device.c_str(),config.driver.c_str());
+	fprintf(stderr,"    can_provide_residual:            %s\n",yesno_str[device->can_provide_residual()?1:0]);
+	fprintf(stderr,"    can_buffer_show_partial_reads:   %s\n",yesno_str[device->can_buffer_show_partial_reads()?1:0]);
+	fprintf(stderr,"    can_write_buffer:                %s\n",yesno_str[device->can_write_buffer()?1:0]);
 
 	/* we're finished with the device */
 	device->release(); device = NULL;
