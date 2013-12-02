@@ -19,6 +19,24 @@
 
 #define UNUSED __attribute__((unused))
 
+/* Fuck you Linux headers. Put the useful #defines we actually need here */
+#ifndef SG_FLAG_DIRECT_IO
+#define SG_FLAG_DIRECT_IO 1     /* default is indirect IO */
+#endif
+
+#ifndef SG_FLAG_UNUSED_LUN_INHIBIT
+#define SG_FLAG_UNUSED_LUN_INHIBIT 2   /* default is overwrite lun in SCSI */
+#endif
+
+#ifndef SG_FLAG_MMAP_IO
+#define SG_FLAG_MMAP_IO 4       /* request memory mapped IO */
+#endif
+
+#ifndef SG_FLAG_NO_DXFER
+#define SG_FLAG_NO_DXFER 0x10000 /* no transfer of kernel buffers to/from */
+				/* user space (debug indirect IO) */
+#endif
+
 using namespace std;
 
 class Jarch3Configuration {
@@ -30,6 +48,7 @@ public:
 	string			driver;
 	string			device;
 	string			command;
+	unsigned long		sector;
 public:
 	bool			no_mmap;
 };
@@ -114,7 +133,7 @@ public:
 	virtual void		clear_command();
 	virtual void		clear_sense();
 	virtual void		clear_data();
-	virtual int		do_scsi(int direction=0,size_t data_length=0);
+	virtual int		do_scsi(int direction=0,size_t n_data_length=0);
 	virtual void		dump_sense(FILE *fp=NULL);
 public:
 	int			fd;
@@ -152,10 +171,11 @@ public:
 	virtual bool		can_write_buffer();
 	virtual unsigned char*	read_buffer(size_t len);
 	virtual size_t		read_buffer_length();
-	virtual int		do_scsi(int direction=0,size_t data_length=0);
+	virtual int		do_scsi(int direction=0,size_t n_data_length=0);
 public:
 	int			reserved_size;
 	void*			reserved_mmap;
+	void*			user_buffer;
 };
 
 /*===================== config class ==================*/
@@ -167,10 +187,11 @@ Jarch3Configuration::~Jarch3Configuration() {
 }
 
 void Jarch3Configuration::reset() {
+	sector = 0;
 	driver = "linux_sg";
 	device = "/dev/dvd";
 	command.clear();
-	no_mmap = false;
+	no_mmap = true; /* This is the default until somebody documents how to fucking use the memory-mapped IO mode */
 }
 
 /*===================== empty base device ==================*/
@@ -354,7 +375,7 @@ void Jarch3Device::dump_sense(FILE *fp) {
 	}
 }
 
-int Jarch3Device::do_scsi(int UNUSED direction,size_t UNUSED data_length) {
+int Jarch3Device::do_scsi(int UNUSED direction,size_t UNUSED n_data_length) {
 	errno = ENOSYS;
 	return -1;
 }
@@ -435,6 +456,7 @@ Jarch3Device *Jarch3Driver_Linux_SG::open(const char *dev,Jarch3Configuration UN
 /*====================== Linux SGIO device ===================*/
 Jarch3Device_Linux_SG::Jarch3Device_Linux_SG(const char *dev,Jarch3Driver *drv,Jarch3Configuration UNUSED *cfg) : Jarch3Device(dev,drv,cfg) {
 	reserved_mmap = NULL;
+	user_buffer = NULL;
 	reserved_size = 0;
 }
 
@@ -442,6 +464,7 @@ Jarch3Device_Linux_SG::~Jarch3Device_Linux_SG() {
 }
 
 void Jarch3Device_Linux_SG::close() {
+	if (user_buffer != NULL) free(user_buffer);
 	if (reserved_mmap != NULL) munmap(reserved_mmap,reserved_size);
 	Jarch3Device::close();
 }
@@ -475,6 +498,12 @@ bool Jarch3Device_Linux_SG::open() {
 		}
 	}
 
+	if (reserved_mmap == NULL) {
+		reserved_size = 0x10000;
+		user_buffer = malloc(reserved_size);
+		if (user_buffer == NULL) fprintf(stderr,"Linux_SG: Unable to alloc user buffer\n");
+	}
+
 	return true;
 }
 
@@ -487,20 +516,20 @@ bool Jarch3Device_Linux_SG::can_buffer_show_partial_reads() {
 }
 
 bool Jarch3Device_Linux_SG::can_write_buffer() {
-	return (reserved_mmap != NULL)?true:false; /* yes, IF we are using mmap I/O */
+	return (reserved_mmap != NULL || user_buffer != NULL)?true:false; /* yes, IF we are using mmap I/O */
 }
 
 unsigned char* Jarch3Device_Linux_SG::read_buffer(size_t len) {
 	if (len > (size_t)reserved_size) return NULL;
-	/* TODO: Return user-allocated buffer if NOT memory-mapped */
-	return (unsigned char*)reserved_mmap;
+	if (reserved_mmap != NULL) return (unsigned char*)reserved_mmap;
+	return (unsigned char*)user_buffer;
 }
 
 size_t Jarch3Device_Linux_SG::read_buffer_length() {
 	return reserved_size;
 }
 
-int Jarch3Device_Linux_SG::do_scsi(int direction,size_t data_length) {
+int Jarch3Device_Linux_SG::do_scsi(int direction,size_t n_data_length) {
 	struct sg_io_hdr sg;
 	int r;
 
@@ -515,6 +544,7 @@ int Jarch3Device_Linux_SG::do_scsi(int direction,size_t data_length) {
 
 	memset(&sg,0,sizeof(sg));
 	memset(sense,0,sizeof(sense));
+	data_length = n_data_length;
 	sense_length = 0;
 
 	sg.interface_id =			'S';
@@ -522,18 +552,29 @@ int Jarch3Device_Linux_SG::do_scsi(int direction,size_t data_length) {
 	sg.cmdp =				cmd;
 	sg.mx_sb_len =				sizeof(sense);
 	sg.sbp =				sense;
-	sg.dxfer_len =				(direction != DirNone) ? data_length : 0;
-	sg.dxferp =				(direction != DirNone) ? (reserved_mmap != NULL ? NULL/*TODO*/ : NULL/*TODO user buffer*/) : NULL;
+	sg.dxfer_len =				(direction != DirNone) ? n_data_length : 0;
+	sg.dxferp =				(direction != DirNone) ? (reserved_mmap != NULL ? NULL : user_buffer) : NULL;
 	sg.timeout =				(timeout >= 0) ? timeout : 30000;
-	/* NTS: OK Linux devs, here's a good example what NOT to do: Don't ever tell me I can set SG_FLAG_MMAP_IO to do the mmap I/O
-	 *      but then let me find out the hard way the Linux kernel headers don't actually have such a flag. That serves only to
-	 *      piss me the fuck off. --J.C. */
-	sg.flags =				(reserved_mmap != NULL ? SG_FLAG_NO_DXFER : SG_FLAG_DIRECT_IO);
+	sg.flags =				(reserved_mmap != NULL ? SG_FLAG_MMAP_IO : SG_FLAG_DIRECT_IO);
 	if (direction == DirToHost)		sg.dxfer_direction = SG_DXFER_FROM_DEV;
 	else if (direction == DirToDevice)	sg.dxfer_direction = SG_DXFER_TO_DEV;
 	else					sg.dxfer_direction = SG_DXFER_NONE;
 
+	if (n_data_length != 0 && direction != DirNone) {
+		if (sg.dxferp == NULL && reserved_mmap == NULL) {
+			fprintf(stderr,"do_scsi() attempt to do data command with no buffer\n");
+			errno = EINVAL;
+			return -1;
+		}
+		else if ((size_t)sg.dxfer_len > (size_t)reserved_size) {
+			fprintf(stderr,"do_scsi() attempt to do data command with transfer larger than buffer\n");
+			errno = EINVAL;
+			return -1;
+		}
+	}
+
 	r = ioctl(fd,SG_IO,(void*)(&sg));
+	if (r < 0) fprintf(stderr,"Linux_SG: SG_IO failure %s\n",strerror(errno));
 
 	sense_length = sg.sb_len_wr;
 	if (sg.driver_status != 0) {
@@ -614,6 +655,8 @@ static void help() {
 	fprintf(stderr,"    -c <command>\n");
 	fprintf(stderr,"\n");
 	fprintf(stderr,"    -no-mmap          Do not use memory-mapped I/O (device driver opt)\n");
+	fprintf(stderr,"    -mmap             Use memory-mapped I/O (device driver opt)\n");
+	fprintf(stderr,"    -s <sector>       When relevent to commands, what sector to operate on\n");
 	fprintf(stderr,"\n");
 	fprintf(stderr,"Commands:\n");
 	fprintf(stderr,"    eject             Eject CD-ROM tray\n");		/* DONE */
@@ -623,6 +666,8 @@ static void help() {
 	fprintf(stderr,"    lock              Lock CD-ROM door\n");		/* DONE */
 	fprintf(stderr,"    unlock            Unlock CD-ROM door\n");		/* DONE */
 	fprintf(stderr,"    test-unit-ready   Test unit ready\n");		/* DONE */
+	fprintf(stderr,"    read-subchannel   Read subchannel\n");		/* DONE */
+	fprintf(stderr,"    seek              Seek the head\n");		/* DONE */
 	fprintf(stderr,"\n");
 	fprintf(stderr,"Driver: linux_sg\n");
 	fprintf(stderr,"   Valid devices are of the form /dev/sr0, /dev/sr1, etc...\n");
@@ -656,6 +701,12 @@ static int parse_argv(Jarch3Configuration &cfg,int argc,char **argv) {
 			}
 			else if (!strcmp(a,"no-mmap")) {
 				cfg.no_mmap = true;
+			}
+			else if (!strcmp(a,"mmap")) {
+				cfg.no_mmap = false;
+			}
+			else if (!strcmp(a,"s")) {
+				cfg.sector = strtoul(argv[i++],NULL,0);
 			}
 			else {
 				fprintf(stderr,"Unknown switch %s\n",a);
@@ -777,6 +828,69 @@ bool prevent_allow_medium_removal(Jarch3Device *dev,unsigned char ctl) {
 	return false;
 }
 
+bool seek_cdrom(Jarch3Device *dev,unsigned long sector) {
+	unsigned char *p;
+
+	p = dev->write_command(10);
+	if (p != NULL) {
+		p[0] = 0x2B;		/* SEEK */
+		p[2] = sector >> 24;
+		p[3] = sector >> 16;
+		p[4] = sector >> 8;
+		p[5] = sector;
+		if (dev->do_scsi() < 0) {
+			printf("SEEK failed\n");
+			dev->dump_sense(stdout);
+			return false;
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
+int read_subchannel_curpos(void *dst,size_t dstmax,Jarch3Device *dev,unsigned char MSF,unsigned char SUBQ) {
+	unsigned char *p,*s;
+	size_t l;
+
+	dev->clear_data();
+	dev->clear_sense();
+	dev->clear_command();
+	p = dev->write_command(10);
+	if (p != NULL) {
+		size_t max = 4 + (SUBQ?12:0);
+
+		if (dstmax > max) dstmax = max;
+
+		p[0] = 0x42;		/* READ SUB-CHANNEL */
+		p[1] = (MSF?0x02:0x00);
+		p[2] = (SUBQ?0x40:0x00);
+		p[3] = 0x01;		/* read current CD position */
+		p[4] = 0;
+		p[5] = 0;
+		p[6] = 0;
+		p[7] = dstmax >> 8;
+		p[8] = dstmax;
+		p[9] = 0;
+		if (dev->do_scsi(Jarch3Device::DirToHost,dstmax) < 0) {
+			printf("READ SUB-CHANNEL failed\n");
+			dev->dump_sense(stdout);
+			return false;
+		}
+
+		l = dev->read_buffer_data_length();
+		if (l == 0) return 0;
+		if (l > dstmax) return -1;
+		s = dev->read_buffer(l);
+		if (s == NULL) return -1;
+		memcpy(dst,s,l);
+		return (int)l;
+	}
+
+	return -1;
+}
+
 int main(int argc,char **argv) {
 	Jarch3Configuration config;
 	Jarch3Driver *driver = NULL;
@@ -831,6 +945,29 @@ int main(int argc,char **argv) {
 	else if (config.command == "unlock") {
 		if (test_unit_ready(device)) printf("Test unit ready OK\n");
 		if (prevent_allow_medium_removal(device,0x00)) printf("PREVENT ALLOW MEDIUM REMOVAL OK\n");
+	}
+	else if (config.command == "seek") {
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (seek_cdrom(device,config.sector)) printf("SEEK OK\n");
+	}
+	else if (config.command == "read-subchannel") {
+		unsigned char buffer[256];
+		int rd,i;
+
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=read_subchannel_curpos(buffer,sizeof(buffer),device,/*MSF=*/1,/*SUBQ=*/1)) < 0) printf(" OK\n");
+
+		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
+		printf("\n");
+
+		printf("Audio status: 0x%02x\n",buffer[1]);
+		printf("Subchannel data length: %u\n",(buffer[2] << 8) + buffer[3]);
+		printf("Subchannel format code: 0x%02x\n",buffer[4]);
+		printf("ADR=%u CONTROL=%u\n",buffer[5]>>4,buffer[5]&0xF);
+		printf("TRACK=%u\n",buffer[6]);
+		printf("INDEX=%u\n",buffer[7]);
+		printf("Absolute CD address M:S:F: %02u:%02u:%02u:%02u\n",buffer[8],buffer[9],buffer[10],buffer[11]);
+		printf("Relative CD address M:S:F: %02u:%02u:%02u:%02u\n",buffer[12],buffer[13],buffer[14],buffer[15]);
 	}
 
 	/* we're finished with the device */
