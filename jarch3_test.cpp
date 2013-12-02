@@ -680,7 +680,9 @@ static int parse_argv(Jarch3Configuration &cfg,int argc,char **argv) {
 /* TODO: Move elsewhere */
 static const char *yesno_str[2] = {"No","Yes"};
 
-bool test_unit_ready(Jarch3Device *dev) {
+#define TUR_EXPECT_MEDIUM_NOT_PRESENT		0x01
+
+bool test_unit_ready(Jarch3Device *dev,unsigned int expect=0) {
 	unsigned char *p;
 	int last_rep=0;
 	int r;
@@ -698,6 +700,9 @@ bool test_unit_ready(Jarch3Device *dev) {
 			p = dev->read_sense(14);
 			if (p != NULL) {
 				if ((p[2]&0xF) == 2 && p[12] == 0x3A) {
+					if (expect&TUR_EXPECT_MEDIUM_NOT_PRESENT)
+						break;
+
 					if (last_rep != 0x023A00) {
 						last_rep = 0x023A00;
 						fprintf(stderr,"Device reports medium not present. Insert media or CTRL+C now\n");
@@ -804,11 +809,11 @@ int main(int argc,char **argv) {
 		else printf("Test failed\n");
 	}
 	else if (config.command == "eject") {
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (test_unit_ready(device,TUR_EXPECT_MEDIUM_NOT_PRESENT)) printf("Test unit ready OK\n");
 		if (start_stop_unit(device,0x02)) printf("START STOP UNIT OK\n");
 	}
 	else if (config.command == "retract") {
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (test_unit_ready(device,TUR_EXPECT_MEDIUM_NOT_PRESENT)) printf("Test unit ready OK\n");
 		if (start_stop_unit(device,0x03)) printf("START STOP UNIT OK\n");
 	}
 	else if (config.command == "spinup") {
