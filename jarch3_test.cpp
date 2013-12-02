@@ -668,6 +668,9 @@ static void help() {
 	fprintf(stderr,"    test-unit-ready   Test unit ready\n");		/* DONE */
 	fprintf(stderr,"    read-subchannel   Read subchannel\n");		/* DONE */
 	fprintf(stderr,"    seek              Seek the head\n");		/* DONE */
+	fprintf(stderr,"    play-audio        Start CD playback\n");		/* DONE */
+	fprintf(stderr,"    pause-audio       Pause CD playback\n");		/* DONE */
+	fprintf(stderr,"    resume-audio      Pause CD playback\n");		/* DONE */
 	fprintf(stderr,"\n");
 	fprintf(stderr,"Driver: linux_sg\n");
 	fprintf(stderr,"   Valid devices are of the form /dev/sr0, /dev/sr1, etc...\n");
@@ -850,6 +853,49 @@ bool seek_cdrom(Jarch3Device *dev,unsigned long sector) {
 	return false;
 }
 
+bool pause_resume_audio(Jarch3Device *dev,unsigned char resume) {
+	unsigned char *p;
+
+	p = dev->write_command(10);
+	if (p != NULL) {
+		p[0] = 0x4B;		/* PAUSE/RESUME */
+		p[8] = resume ? 0x01 : 0x00;
+		if (dev->do_scsi() < 0) {
+			printf("PLAY AUDIO failed\n");
+			dev->dump_sense(stdout);
+			return false;
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
+bool play_audio(Jarch3Device *dev,unsigned long sector) {
+	unsigned char *p;
+
+	p = dev->write_command(10);
+	if (p != NULL) {
+		p[0] = 0x45;		/* PLAY AUDIO */
+		p[2] = sector >> 24;
+		p[3] = sector >> 16;
+		p[4] = sector >> 8;
+		p[5] = sector;
+		p[7] = 0xFF;
+		p[8] = 0xFF;
+		if (dev->do_scsi() < 0) {
+			printf("PLAY AUDIO failed\n");
+			dev->dump_sense(stdout);
+			return false;
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
 int read_subchannel_curpos(void *dst,size_t dstmax,Jarch3Device *dev,unsigned char MSF,unsigned char SUBQ) {
 	unsigned char *p,*s;
 	size_t l;
@@ -949,6 +995,18 @@ int main(int argc,char **argv) {
 	else if (config.command == "seek") {
 		if (test_unit_ready(device)) printf("Test unit ready OK\n");
 		if (seek_cdrom(device,config.sector)) printf("SEEK OK\n");
+	}
+	else if (config.command == "play-audio") {
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (play_audio(device,config.sector)) printf("PLAY AUDIO OK\n");
+	}
+	else if (config.command == "pause-audio") {
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (pause_resume_audio(device,/*resume=*/0)) printf("PAUSE OK\n");
+	}
+	else if (config.command == "resume-audio") {
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (pause_resume_audio(device,/*resume=*/1)) printf("RESUME OK\n");
 	}
 	else if (config.command == "read-subchannel") {
 		unsigned char buffer[256];
