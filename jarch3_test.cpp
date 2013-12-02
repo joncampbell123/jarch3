@@ -49,6 +49,8 @@ public:
 	string			device;
 	string			command;
 	unsigned long		sector;
+	unsigned char		page;
+	unsigned char		subpage;
 public:
 	bool			no_mmap;
 };
@@ -187,7 +189,9 @@ Jarch3Configuration::~Jarch3Configuration() {
 }
 
 void Jarch3Configuration::reset() {
+	page = 0;
 	sector = 0;
+	subpage = 0;
 	driver = "linux_sg";
 	device = "/dev/dvd";
 	command.clear();
@@ -657,6 +661,8 @@ static void help() {
 	fprintf(stderr,"    -no-mmap          Do not use memory-mapped I/O (device driver opt)\n");
 	fprintf(stderr,"    -mmap             Use memory-mapped I/O (device driver opt)\n");
 	fprintf(stderr,"    -s <sector>       When relevent to commands, what sector to operate on\n");
+	fprintf(stderr,"    --page <n>        Mode sense page\n");
+	fprintf(stderr,"    --subpage <n>     Mode sense subpage\n");
 	fprintf(stderr,"\n");
 	fprintf(stderr,"Commands:\n");
 	fprintf(stderr,"    eject             Eject CD-ROM tray\n");		/* DONE */
@@ -671,6 +677,7 @@ static void help() {
 	fprintf(stderr,"    play-audio        Start CD playback\n");		/* DONE */
 	fprintf(stderr,"    pause-audio       Pause CD playback\n");		/* DONE */
 	fprintf(stderr,"    resume-audio      Pause CD playback\n");		/* DONE */
+	fprintf(stderr,"    mode-sense        MODE SENSE\n");			/* DONE */
 	fprintf(stderr,"\n");
 	fprintf(stderr,"Driver: linux_sg\n");
 	fprintf(stderr,"   Valid devices are of the form /dev/sr0, /dev/sr1, etc...\n");
@@ -710,6 +717,12 @@ static int parse_argv(Jarch3Configuration &cfg,int argc,char **argv) {
 			}
 			else if (!strcmp(a,"s")) {
 				cfg.sector = strtoul(argv[i++],NULL,0);
+			}
+			else if (!strcmp(a,"page")) {
+				cfg.page = strtoul(argv[i++],NULL,0);
+			}
+			else if (!strcmp(a,"subpage")) {
+				cfg.subpage = strtoul(argv[i++],NULL,0);
 			}
 			else {
 				fprintf(stderr,"Unknown switch %s\n",a);
@@ -937,6 +950,43 @@ int read_subchannel_curpos(void *dst,size_t dstmax,Jarch3Device *dev,unsigned ch
 	return -1;
 }
 
+int mode_sense(void *dst,size_t dstmax,Jarch3Device *dev,unsigned char PAGE,unsigned char SUBPAGE) {
+	unsigned char *p,*s;
+	size_t l;
+
+	dev->clear_data();
+	dev->clear_sense();
+	dev->clear_command();
+	p = dev->write_command(10);
+	if (p != NULL) {
+		p[0] = 0x5A;		/* MODE SENSE */
+		p[1] = 0x00;
+		p[2] = PAGE & 0x3F;
+		p[3] = SUBPAGE;
+		p[4] = 0;
+		p[5] = 0;
+		p[6] = 0;
+		p[7] = dstmax >> 8;
+		p[8] = dstmax;
+		p[9] = 0;
+		if (dev->do_scsi(Jarch3Device::DirToHost,dstmax) < 0) {
+			printf("MODE SENSE failed\n");
+			dev->dump_sense(stdout);
+			return false;
+		}
+
+		l = dev->read_buffer_data_length();
+		if (l == 0) return 0;
+		if (l > dstmax) return -1;
+		s = dev->read_buffer(l);
+		if (s == NULL) return -1;
+		memcpy(dst,s,l);
+		return (int)l;
+	}
+
+	return -1;
+}
+
 int main(int argc,char **argv) {
 	Jarch3Configuration config;
 	Jarch3Driver *driver = NULL;
@@ -1007,6 +1057,16 @@ int main(int argc,char **argv) {
 	else if (config.command == "resume-audio") {
 		if (test_unit_ready(device)) printf("Test unit ready OK\n");
 		if (pause_resume_audio(device,/*resume=*/1)) printf("RESUME OK\n");
+	}
+	else if (config.command == "mode-sense") {
+		unsigned char buffer[256];
+		int rd,i;
+
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=mode_sense(buffer,sizeof(buffer),device,config.page,config.subpage)) < 0) printf("RESUME OK\n");
+
+		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
+		printf("\n");
 	}
 	else if (config.command == "read-subchannel") {
 		unsigned char buffer[256];
