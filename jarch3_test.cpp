@@ -195,7 +195,7 @@ void Jarch3Configuration::reset() {
 	driver = "linux_sg";
 	device = "/dev/dvd";
 	command.clear();
-	no_mmap = true; /* This is the default until somebody documents how to fucking use the memory-mapped IO mode */
+	no_mmap = false;
 }
 
 /*===================== empty base device ==================*/
@@ -582,15 +582,12 @@ int Jarch3Device_Linux_SG::do_scsi(int direction,size_t n_data_length) {
 
 	sense_length = sg.sb_len_wr;
 	if (sg.driver_status != 0) {
-//		fprintf(stderr,"Linux_SG: SG_IO driver_status=0x%lx\n",(unsigned long)sg.driver_status);
 		if (r == 0) { r = -1; errno = EIO; }
 	}
 	if (sg.masked_status != 0) {
-//		fprintf(stderr,"Linux_SG: SG_IO masked_status=0x%lx\n",(unsigned long)sg.masked_status);
 		if (r == 0) { r = -1; errno = EIO; }
 	}
 	if (sg.host_status != 0) {
-//		fprintf(stderr,"Linux_SG: SG_IO host_status=0x%lx\n",(unsigned long)sg.host_status);
 		if (r == 0) { r = -1; errno = EIO; }
 	}
 
