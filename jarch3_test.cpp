@@ -557,7 +557,7 @@ int Jarch3Device_Linux_SG::do_scsi(int direction,size_t n_data_length) {
 	sg.mx_sb_len =				sizeof(sense);
 	sg.sbp =				sense;
 	sg.dxfer_len =				(direction != DirNone) ? n_data_length : 0;
-	sg.dxferp =				(direction != DirNone) ? (reserved_mmap != NULL ? NULL : user_buffer) : NULL;
+	sg.dxferp =				(direction != DirNone) ? (reserved_mmap != NULL ? reserved_mmap : user_buffer) : NULL;
 	sg.timeout =				(timeout >= 0) ? timeout : 30000;
 	sg.flags =				(reserved_mmap != NULL ? SG_FLAG_MMAP_IO : SG_FLAG_DIRECT_IO);
 	if (direction == DirToHost)		sg.dxfer_direction = SG_DXFER_FROM_DEV;
