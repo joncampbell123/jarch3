@@ -1022,6 +1022,34 @@ int mode_sense(void *dst,size_t dstmax,Jarch3Device *dev,unsigned char PAGE,unsi
 	return -1;
 }
 
+const char *mmc_profile_to_str(unsigned int p) {
+	switch (p) {
+		case 0x0000:	return "No Current Profile";
+		case 0x0002:	return "Removable Disk Profile";
+		case 0x0008:	return "CD-ROM Profile";
+		case 0x0009:	return "CD-R Profile";
+		case 0x000A:	return "CD-RW Profile";
+		case 0x0010:	return "DVD-ROM Profile";
+		case 0x0011:	return "DVD-R Sequential Recording Profile";
+		case 0x0012:	return "DVD-RAM Profile";
+		case 0x0013:	return "DVD-RW Restricted Overwrite Profile";
+		case 0x0014:	return "DVD-RW Sequential Recording Profile";
+		case 0x0015:	return "DVD-R Dual Layer Sequential Recording Profile";
+		case 0x0016:	return "DVD-R Dual Layer Jump Recording Profile";
+		case 0x0017:	return "DVD-RW Dual Layer Profile";
+		case 0x0018:	return "DVD-Download Disc Recording Profile";
+		case 0x001A:	return "DVD+RW Profile";
+		case 0x001B:	return "DVD+R Profile";
+		case 0x002A:	return "DVD+RW Dual Layer Profile";
+		case 0x002B:	return "DVD+R Dual Layer Profile";
+		case 0x0040:	return "BD-ROM Profile";
+		case 0x0041:	return "BD-R Sequential Recording Profile";
+		/* TODO: More from MMC-6 */
+	};
+
+	return NULL;
+}
+
 int main(int argc,char **argv) {
 	Jarch3Configuration config;
 	Jarch3Driver *driver = NULL;
@@ -1134,10 +1162,11 @@ int main(int argc,char **argv) {
 
 		/* NTS: Data Length field @0 is 32-bit wide and contains the length of data following the field.
 		 *      Typically that means a total response of 424 bytes has a Data Length field of 420 */
-		printf("Feature header: datalen=%u (when returned %u) current_profile=0x%04x\n",
+		printf("Feature header: datalen=%u (when returned %u) current_profile=0x%04x %s\n",
 			((unsigned int)buffer[0] << 24) + ((unsigned int)buffer[1] << 16) +
 			((unsigned int)buffer[2] <<  8) + ((unsigned int)buffer[3]),
-			rd,((unsigned int)buffer[6] << 8) + ((unsigned int)buffer[7]));
+			rd,((unsigned int)buffer[6] << 8) + ((unsigned int)buffer[7]),
+			mmc_profile_to_str(((unsigned int)buffer[6] << 8) + ((unsigned int)buffer[7])));
 
 		s = buffer+8;
 		f = buffer+rd;
