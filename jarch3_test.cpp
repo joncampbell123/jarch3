@@ -37,7 +37,11 @@
 				/* user space (debug indirect IO) */
 #endif
 
+#define TUR_EXPECT_MEDIUM_NOT_PRESENT		0x01
+
 using namespace std;
+
+const char *jarch3_yesno_str[2] = {"No","Yes"};
 
 class Jarch3Configuration {
 public:
@@ -297,7 +301,7 @@ size_t Jarch3Device::read_buffer_data_length() {
 	return data_length;
 }
 
-static const char *scsi_keys[16] = {
+static const char *jarch3_scsi_keys[16] = {
 	"No Sense",		/* 0x0 */
 	"Soft Error",		/* 0x1 */
 	"Not Ready",		/* 0x2 */
@@ -319,7 +323,7 @@ static const char *scsi_keys[16] = {
 	""			/* 0xF */
 };
 
-static const char *scsi_asc(unsigned char key,unsigned char asc,unsigned char ascq) {
+static const char *jarch3_scsi_asc(unsigned char key,unsigned char asc,unsigned char ascq) {
 	switch (key) {
 		case 0x0:
 			switch (asc) {
@@ -374,8 +378,8 @@ void Jarch3Device::dump_sense(FILE *fp) {
 
 	if (sense_length > 2) {
 		fprintf(fp,"     Which means: Key=%s  ASC=%s\n",
-			scsi_keys[sense[2]&0xF],
-			scsi_asc(sense[2]&0xF,sense[12],sense[13]));
+			jarch3_scsi_keys[sense[2]&0xF],
+			jarch3_scsi_asc(sense[2]&0xF,sense[12],sense[13]));
 	}
 }
 
@@ -750,12 +754,7 @@ static int parse_argv(Jarch3Configuration &cfg,int argc,char **argv) {
 	return 0;
 }
 
-/* TODO: Move elsewhere */
-static const char *yesno_str[2] = {"No","Yes"};
-
-#define TUR_EXPECT_MEDIUM_NOT_PRESENT		0x01
-
-bool test_unit_ready(Jarch3Device *dev,unsigned int expect=0) {
+bool jarch3_test_unit_ready(Jarch3Device *dev,unsigned int expect=0) {
 	unsigned char *p;
 	int last_rep=0;
 	int r;
@@ -812,7 +811,7 @@ bool test_unit_ready(Jarch3Device *dev,unsigned int expect=0) {
 	return true;
 }
 
-bool start_stop_unit(Jarch3Device *dev,unsigned char ctl/*[1:0] = LoEj, Start*/) {
+bool jarch3_start_stop_unit(Jarch3Device *dev,unsigned char ctl/*[1:0] = LoEj, Start*/) {
 	unsigned char *p;
 
 	p = dev->write_command(6);
@@ -831,7 +830,7 @@ bool start_stop_unit(Jarch3Device *dev,unsigned char ctl/*[1:0] = LoEj, Start*/)
 	return false;
 }
 
-bool prevent_allow_medium_removal(Jarch3Device *dev,unsigned char ctl) {
+bool jarch3_prevent_allow_medium_removal(Jarch3Device *dev,unsigned char ctl) {
 	unsigned char *p;
 
 	p = dev->write_command(6);
@@ -850,7 +849,7 @@ bool prevent_allow_medium_removal(Jarch3Device *dev,unsigned char ctl) {
 	return false;
 }
 
-bool seek_cdrom(Jarch3Device *dev,unsigned long sector) {
+bool jarch3_seek_cdrom(Jarch3Device *dev,unsigned long sector) {
 	unsigned char *p;
 
 	p = dev->write_command(10);
@@ -872,7 +871,7 @@ bool seek_cdrom(Jarch3Device *dev,unsigned long sector) {
 	return false;
 }
 
-bool pause_resume_audio(Jarch3Device *dev,unsigned char resume) {
+bool jarch3_pause_resume_audio(Jarch3Device *dev,unsigned char resume) {
 	unsigned char *p;
 
 	p = dev->write_command(10);
@@ -891,7 +890,7 @@ bool pause_resume_audio(Jarch3Device *dev,unsigned char resume) {
 	return false;
 }
 
-bool play_audio(Jarch3Device *dev,unsigned long sector) {
+bool jarch3_play_audio(Jarch3Device *dev,unsigned long sector) {
 	unsigned char *p;
 
 	p = dev->write_command(10);
@@ -915,7 +914,7 @@ bool play_audio(Jarch3Device *dev,unsigned long sector) {
 	return false;
 }
 
-int read10(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned int sects) {
+int jarch3_read10(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned int sects) {
 	unsigned char *p,*s;
 	size_t l;
 
@@ -952,7 +951,7 @@ int read10(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned 
 	return -1;
 }
 
-int read12(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned int sects) {
+int jarch3_read12(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned int sects) {
 	unsigned char *p,*s;
 	size_t l;
 
@@ -991,7 +990,7 @@ int read12(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned 
 	return -1;
 }
 
-int readcd(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned int sects,unsigned char expected_sector_type,unsigned char dap,unsigned char b9,unsigned char b10) {
+int jarch3_readcd(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned int sects,unsigned char expected_sector_type,unsigned char dap,unsigned char b9,unsigned char b10) {
 	unsigned char *p,*s;
 	size_t l;
 
@@ -1030,7 +1029,7 @@ int readcd(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned 
 	return -1;
 }
 
-int readmsf(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned int sects,unsigned char expected_sector_type,unsigned char dap,unsigned char b9,unsigned char b10) {
+int jarch3_readmsf(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned int sects,unsigned char expected_sector_type,unsigned char dap,unsigned char b9,unsigned char b10) {
 	unsigned char SM,SS,SF,EM,ES,EF;
 	unsigned char *p,*s;
 	size_t l;
@@ -1081,7 +1080,7 @@ int readmsf(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned
 	return -1;
 }
 
-int get_capacity(void *dst,size_t dstmax,Jarch3Device *dev) {
+int jarch3_get_capacity(void *dst,size_t dstmax,Jarch3Device *dev) {
 	unsigned char *p,*s;
 	size_t l;
 
@@ -1118,7 +1117,7 @@ int get_capacity(void *dst,size_t dstmax,Jarch3Device *dev) {
 	return -1;
 }
 
-int get_configuration(void *dst,size_t dstmax,Jarch3Device *dev) {
+int jarch3_get_configuration(void *dst,size_t dstmax,Jarch3Device *dev) {
 	unsigned char *p,*s;
 	size_t l;
 
@@ -1155,7 +1154,7 @@ int get_configuration(void *dst,size_t dstmax,Jarch3Device *dev) {
 	return -1;
 }
 
-int get_configuration_profile_only(void *dst,size_t dstmax,Jarch3Device *dev) {
+int jarch3_get_configuration_profile_only(void *dst,size_t dstmax,Jarch3Device *dev) {
 	unsigned char *p,*s;
 	size_t l;
 
@@ -1192,7 +1191,7 @@ int get_configuration_profile_only(void *dst,size_t dstmax,Jarch3Device *dev) {
 	return -1;
 }
 
-int read_subchannel_curpos(void *dst,size_t dstmax,Jarch3Device *dev,unsigned char MSF,unsigned char SUBQ) {
+int jarch3_read_subchannel_curpos(void *dst,size_t dstmax,Jarch3Device *dev,unsigned char MSF,unsigned char SUBQ) {
 	unsigned char *p,*s;
 	size_t l;
 
@@ -1233,7 +1232,7 @@ int read_subchannel_curpos(void *dst,size_t dstmax,Jarch3Device *dev,unsigned ch
 	return -1;
 }
 
-int mode_sense(void *dst,size_t dstmax,Jarch3Device *dev,unsigned char PAGE,unsigned char SUBPAGE) {
+int jarch3_mode_sense(void *dst,size_t dstmax,Jarch3Device *dev,unsigned char PAGE,unsigned char SUBPAGE) {
 	unsigned char *p,*s;
 	size_t l;
 
@@ -1270,7 +1269,7 @@ int mode_sense(void *dst,size_t dstmax,Jarch3Device *dev,unsigned char PAGE,unsi
 	return -1;
 }
 
-const char *mmc_profile_to_str(unsigned int p) {
+const char *jarch3_mmc_profile_to_str(unsigned int p) {
 	switch (p) {
 		case 0x0000:	return "No Current Profile";
 		case 0x0002:	return "Removable Disk Profile";
@@ -1321,60 +1320,60 @@ int main(int argc,char **argv) {
 	}
 
 	fprintf(stderr,"Opened device %s (driver %s) successfully\n",config.device.c_str(),config.driver.c_str());
-	fprintf(stderr,"    can_provide_residual:            %s\n",yesno_str[device->can_provide_residual()?1:0]);
-	fprintf(stderr,"    can_buffer_show_partial_reads:   %s\n",yesno_str[device->can_buffer_show_partial_reads()?1:0]);
-	fprintf(stderr,"    can_write_buffer:                %s\n",yesno_str[device->can_write_buffer()?1:0]);
+	fprintf(stderr,"    can_provide_residual:            %s\n",jarch3_yesno_str[device->can_provide_residual()?1:0]);
+	fprintf(stderr,"    can_buffer_show_partial_reads:   %s\n",jarch3_yesno_str[device->can_buffer_show_partial_reads()?1:0]);
+	fprintf(stderr,"    can_write_buffer:                %s\n",jarch3_yesno_str[device->can_write_buffer()?1:0]);
 
 	if (config.command == "test-unit-ready") {
-		if (test_unit_ready(device)) printf("Test OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test OK\n");
 		else printf("Test failed\n");
 	}
 	else if (config.command == "eject") {
-		if (test_unit_ready(device,TUR_EXPECT_MEDIUM_NOT_PRESENT)) printf("Test unit ready OK\n");
-		if (start_stop_unit(device,0x02)) printf("START STOP UNIT OK\n");
+		if (jarch3_test_unit_ready(device,TUR_EXPECT_MEDIUM_NOT_PRESENT)) printf("Test unit ready OK\n");
+		if (jarch3_start_stop_unit(device,0x02)) printf("START STOP UNIT OK\n");
 	}
 	else if (config.command == "retract") {
-		if (test_unit_ready(device,TUR_EXPECT_MEDIUM_NOT_PRESENT)) printf("Test unit ready OK\n");
-		if (start_stop_unit(device,0x03)) printf("START STOP UNIT OK\n");
+		if (jarch3_test_unit_ready(device,TUR_EXPECT_MEDIUM_NOT_PRESENT)) printf("Test unit ready OK\n");
+		if (jarch3_start_stop_unit(device,0x03)) printf("START STOP UNIT OK\n");
 	}
 	else if (config.command == "spinup") {
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if (start_stop_unit(device,0x01)) printf("START STOP UNIT OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (jarch3_start_stop_unit(device,0x01)) printf("START STOP UNIT OK\n");
 	}
 	else if (config.command == "spindown") {
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if (start_stop_unit(device,0x00)) printf("START STOP UNIT OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (jarch3_start_stop_unit(device,0x00)) printf("START STOP UNIT OK\n");
 	}
 	else if (config.command == "lock") {
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if (prevent_allow_medium_removal(device,0x01)) printf("PREVENT ALLOW MEDIUM REMOVAL OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (jarch3_prevent_allow_medium_removal(device,0x01)) printf("PREVENT ALLOW MEDIUM REMOVAL OK\n");
 	}
 	else if (config.command == "unlock") {
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if (prevent_allow_medium_removal(device,0x00)) printf("PREVENT ALLOW MEDIUM REMOVAL OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (jarch3_prevent_allow_medium_removal(device,0x00)) printf("PREVENT ALLOW MEDIUM REMOVAL OK\n");
 	}
 	else if (config.command == "seek") {
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if (seek_cdrom(device,config.sector)) printf("SEEK OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (jarch3_seek_cdrom(device,config.sector)) printf("SEEK OK\n");
 	}
 	else if (config.command == "play-audio") {
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if (play_audio(device,config.sector)) printf("PLAY AUDIO OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (jarch3_play_audio(device,config.sector)) printf("PLAY AUDIO OK\n");
 	}
 	else if (config.command == "pause-audio") {
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if (pause_resume_audio(device,/*resume=*/0)) printf("PAUSE OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (jarch3_pause_resume_audio(device,/*resume=*/0)) printf("PAUSE OK\n");
 	}
 	else if (config.command == "resume-audio") {
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if (pause_resume_audio(device,/*resume=*/1)) printf("RESUME OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if (jarch3_pause_resume_audio(device,/*resume=*/1)) printf("RESUME OK\n");
 	}
 	else if (config.command == "mode-sense") {
 		unsigned char buffer[256];
 		int rd,i;
 
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if ((rd=mode_sense(buffer,sizeof(buffer),device,config.page,config.subpage)) < 0) printf("RESUME OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=jarch3_mode_sense(buffer,sizeof(buffer),device,config.page,config.subpage)) < 0) printf("RESUME OK\n");
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
 		printf("\n");
@@ -1383,8 +1382,8 @@ int main(int argc,char **argv) {
 		unsigned char buffer[256];
 		int rd,i;
 
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if ((rd=read_subchannel_curpos(buffer,sizeof(buffer),device,/*MSF=*/1,/*SUBQ=*/1)) < 0) printf(" OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=jarch3_read_subchannel_curpos(buffer,sizeof(buffer),device,/*MSF=*/1,/*SUBQ=*/1)) < 0) printf(" OK\n");
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
 		printf("\n");
@@ -1402,8 +1401,8 @@ int main(int argc,char **argv) {
 		unsigned char buffer[1024];
 		int rd,i;
 
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if ((rd=get_configuration_profile_only(buffer,sizeof(buffer),device)) < 0) printf(" OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=jarch3_get_configuration_profile_only(buffer,sizeof(buffer),device)) < 0) printf(" OK\n");
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
 		printf("\n");
@@ -1414,14 +1413,14 @@ int main(int argc,char **argv) {
 			((unsigned int)buffer[0] << 24) + ((unsigned int)buffer[1] << 16) +
 			((unsigned int)buffer[2] <<  8) + ((unsigned int)buffer[3]),
 			rd,((unsigned int)buffer[6] << 8) + ((unsigned int)buffer[7]),
-			mmc_profile_to_str(((unsigned int)buffer[6] << 8) + ((unsigned int)buffer[7])));
+			jarch3_mmc_profile_to_str(((unsigned int)buffer[6] << 8) + ((unsigned int)buffer[7])));
 	}
 	else if (config.command == "get-config") {
 		unsigned char buffer[16384],*s,*f;
 		int rd,i;
 
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if ((rd=get_configuration(buffer,sizeof(buffer),device)) < 0) printf(" OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=jarch3_get_configuration(buffer,sizeof(buffer),device)) < 0) printf(" OK\n");
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
 		printf("\n");
@@ -1432,7 +1431,7 @@ int main(int argc,char **argv) {
 			((unsigned int)buffer[0] << 24) + ((unsigned int)buffer[1] << 16) +
 			((unsigned int)buffer[2] <<  8) + ((unsigned int)buffer[3]),
 			rd,((unsigned int)buffer[6] << 8) + ((unsigned int)buffer[7]),
-			mmc_profile_to_str(((unsigned int)buffer[6] << 8) + ((unsigned int)buffer[7])));
+			jarch3_mmc_profile_to_str(((unsigned int)buffer[6] << 8) + ((unsigned int)buffer[7])));
 
 		s = buffer+8;
 		f = buffer+rd;
@@ -1484,8 +1483,8 @@ int main(int argc,char **argv) {
 		unsigned char buffer[256];
 		int rd,i;
 
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if ((rd=get_capacity(buffer,sizeof(buffer),device)) < 0) printf(" OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=jarch3_get_capacity(buffer,sizeof(buffer),device)) < 0) printf(" OK\n");
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
 		printf("\n");
@@ -1500,8 +1499,8 @@ int main(int argc,char **argv) {
 		unsigned char buffer[2048];
 		int rd,i;
 
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if ((rd=read10(buffer,sizeof(buffer),device,config.sector,1)) < 0) printf(" OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=jarch3_read10(buffer,sizeof(buffer),device,config.sector,1)) < 0) printf(" OK\n");
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
 		printf("\n");
@@ -1516,8 +1515,8 @@ int main(int argc,char **argv) {
 		unsigned char buffer[2048];
 		int rd,i;
 
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if ((rd=read12(buffer,sizeof(buffer),device,config.sector,1)) < 0) printf(" OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=jarch3_read12(buffer,sizeof(buffer),device,config.sector,1)) < 0) printf(" OK\n");
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
 		printf("\n");
@@ -1532,8 +1531,8 @@ int main(int argc,char **argv) {
 		unsigned char buffer[2048];
 		int rd,i;
 
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if ((rd=readcd(buffer,sizeof(buffer),device,config.sector,1,/*sector_type=MODE-1*/2,/*dap=*/0,/*b9=*/0x10,/*b10=*/0x00)) < 0) printf(" OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=jarch3_readcd(buffer,sizeof(buffer),device,config.sector,1,/*sector_type=MODE-1*/2,/*dap=*/0,/*b9=*/0x10,/*b10=*/0x00)) < 0) printf(" OK\n");
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
 		printf("\n");
@@ -1548,8 +1547,8 @@ int main(int argc,char **argv) {
 		unsigned char buffer[2048];
 		int rd,i;
 
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if ((rd=readcd(buffer,sizeof(buffer),device,config.sector,1,/*sector_type=MODE-2 FORM-1*/4,/*dap=*/0,/*b9=*/0x10,/*b10=*/0x00)) < 0) printf(" OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=jarch3_readcd(buffer,sizeof(buffer),device,config.sector,1,/*sector_type=MODE-2 FORM-1*/4,/*dap=*/0,/*b9=*/0x10,/*b10=*/0x00)) < 0) printf(" OK\n");
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
 		printf("\n");
@@ -1564,8 +1563,8 @@ int main(int argc,char **argv) {
 		unsigned char buffer[2352];
 		int rd,i;
 
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if ((rd=readcd(buffer,sizeof(buffer),device,config.sector,1,/*sector_type=any*/0,/*dap=*/0,/*b9=*/0xF8,/*b10=*/0x00)) < 0) printf(" OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=jarch3_readcd(buffer,sizeof(buffer),device,config.sector,1,/*sector_type=any*/0,/*dap=*/0,/*b9=*/0xF8,/*b10=*/0x00)) < 0) printf(" OK\n");
 		printf("Got %u bytes\n",rd);
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
@@ -1581,8 +1580,8 @@ int main(int argc,char **argv) {
 		unsigned char buffer[2352*2];
 		int rd,i;
 
-		if (test_unit_ready(device)) printf("Test unit ready OK\n");
-		if ((rd=readmsf(buffer,sizeof(buffer),device,config.sector,1,/*sector_type=any*/0,/*dap=*/0,/*b9=*/0xF8,/*b10=*/0x00)) < 0) printf(" OK\n");
+		if (jarch3_test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=jarch3_readmsf(buffer,sizeof(buffer),device,config.sector,1,/*sector_type=any*/0,/*dap=*/0,/*b9=*/0xF8,/*b10=*/0x00)) < 0) printf(" OK\n");
 		printf("Got %u bytes\n",rd);
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
