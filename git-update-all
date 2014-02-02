@@ -8,7 +8,7 @@ if [[ x"$curbranch" == x"" ]]; then
 fi
 
 # remove: certain .cpp files and folders made up on the fly
-rm -Rfv doc media-item-outputs/blackmagic-decklink-sdi/BlackMagicDeckLinkAPIDispatch.cpp media-items/video-passthru/BlackMagicDeckLinkAPIDispatch.cpp m4
+rm -Rfv doc media-item-outputs/blackmagic-decklink-sdi/BlackMagicDeckLinkAPIDispatch.cpp media-items/video-passthru/BlackMagicDeckLinkAPIDispatch.cpp m4 jarch3
 rm -Rfv documentation/*.pdf.tmp
 
 # CHECK: Are there new .c, .h, or .cpp files I forgot to add?
