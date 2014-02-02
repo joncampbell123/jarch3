@@ -676,6 +676,12 @@ static void help() {
 	fprintf(stderr,"    resume-audio      Pause CD playback\n");		/* DONE */
 	fprintf(stderr,"    mode-sense        MODE SENSE\n");			/* DONE */
 	fprintf(stderr,"    get-config        GET CONFIGURATION\n");		/* DONE */
+	fprintf(stderr,"    get-capacity      Get capacity\n");			/* DONE */
+	fprintf(stderr,"    read-10           READ(10)\n");			/* DONE */
+	fprintf(stderr,"    read-12           READ(12)\n");			/* DONE */
+	fprintf(stderr,"    read-cd-data-mode1             READ CD (sector type mode 1)\n");	/* DONE */
+	fprintf(stderr,"    read-cd-data-mode2-form1       READ CD (sector type mode 2 form 1)\n");	/* DONE */
+	fprintf(stderr,"    read-cd-data-raw               READ CD (sector type any raw 2352)\n");	/* DONE */
 	fprintf(stderr,"\n");
 	fprintf(stderr,"Driver: linux_sg\n");
 	fprintf(stderr,"   Valid devices are of the form /dev/sr0, /dev/sr1, etc...\n");
@@ -967,6 +973,45 @@ int read12(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned 
 		p[11] = 0;
 		if (dev->do_scsi(Jarch3Device::DirToHost,dstmax) < 0) {
 			printf("READ(12) failed\n");
+			dev->dump_sense(stdout);
+			return false;
+		}
+
+		l = dev->read_buffer_data_length();
+		if (l == 0) return 0;
+		if (l > dstmax) return -1;
+		s = dev->read_buffer(l);
+		if (s == NULL) return -1;
+		memcpy(dst,s,l);
+		return (int)l;
+	}
+
+	return -1;
+}
+
+int readcd(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned int sects,unsigned char expected_sector_type,unsigned char dap,unsigned char b9,unsigned char b10) {
+	unsigned char *p,*s;
+	size_t l;
+
+	dev->clear_data();
+	dev->clear_sense();
+	dev->clear_command();
+	p = dev->write_command(12);
+	if (p != NULL) {
+		p[0] = 0xBE;		/* READ CD */
+		p[1] = (expected_sector_type << 2) | (dap << 1);
+		p[2] = (lba >> 24);
+		p[3] = (lba >> 16);
+		p[4] = (lba >> 8);
+		p[5] = lba;
+		p[6] = sects >> 16;
+		p[7] = sects >> 8;
+		p[8] = sects;
+		p[9] = b9;
+		p[10] = b10;
+		p[11] = 0;
+		if (dev->do_scsi(Jarch3Device::DirToHost,dstmax) < 0) {
+			printf("READ CD failed\n");
 			dev->dump_sense(stdout);
 			return false;
 		}
@@ -1365,6 +1410,55 @@ int main(int argc,char **argv) {
 
 		if (test_unit_ready(device)) printf("Test unit ready OK\n");
 		if ((rd=read12(buffer,sizeof(buffer),device,config.sector,1)) < 0) printf(" OK\n");
+
+		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
+		printf("\n");
+
+		for (i=0;i < rd;i++) {
+			if (buffer[i] >= 32 && buffer[i] < 127) printf("%c",buffer[i]);
+			else printf(".");
+		}
+		printf("\n");
+	}
+	else if (config.command == "read-cd-data-mode1") {
+		unsigned char buffer[2048];
+		int rd,i;
+
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=readcd(buffer,sizeof(buffer),device,config.sector,1,/*sector_type=MODE-1*/2,/*dap=*/0,/*b9=*/0x10,/*b10=*/0x00)) < 0) printf(" OK\n");
+
+		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
+		printf("\n");
+
+		for (i=0;i < rd;i++) {
+			if (buffer[i] >= 32 && buffer[i] < 127) printf("%c",buffer[i]);
+			else printf(".");
+		}
+		printf("\n");
+	}
+	else if (config.command == "read-cd-data-mode2-form1") {
+		unsigned char buffer[2048];
+		int rd,i;
+
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=readcd(buffer,sizeof(buffer),device,config.sector,1,/*sector_type=MODE-2 FORM-1*/4,/*dap=*/0,/*b9=*/0x10,/*b10=*/0x00)) < 0) printf(" OK\n");
+
+		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
+		printf("\n");
+
+		for (i=0;i < rd;i++) {
+			if (buffer[i] >= 32 && buffer[i] < 127) printf("%c",buffer[i]);
+			else printf(".");
+		}
+		printf("\n");
+	}
+	else if (config.command == "read-cd-data-raw") {
+		unsigned char buffer[2352];
+		int rd,i;
+
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=readcd(buffer,sizeof(buffer),device,config.sector,1,/*sector_type=any*/0,/*dap=*/0,/*b9=*/0xF8,/*b10=*/0x00)) < 0) printf(" OK\n");
+		printf("Got %u bytes\n",rd);
 
 		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
 		printf("\n");
