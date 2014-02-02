@@ -907,6 +907,43 @@ bool play_audio(Jarch3Device *dev,unsigned long sector) {
 	return false;
 }
 
+int get_capacity(void *dst,size_t dstmax,Jarch3Device *dev) {
+	unsigned char *p,*s;
+	size_t l;
+
+	dev->clear_data();
+	dev->clear_sense();
+	dev->clear_command();
+	p = dev->write_command(10);
+	if (p != NULL) {
+		p[0] = 0x25;		/* READ CAPACITY */
+		p[1] = 0x00;		/* RT=0 */
+		p[2] = 0x00;		/* Starting feature number==0 */
+		p[3] = 0x00;		/* ditto */
+		p[4] = 0;
+		p[5] = 0;
+		p[6] = 0;
+		p[7] = 0;
+		p[8] = 0;
+		p[9] = 0;
+		if (dev->do_scsi(Jarch3Device::DirToHost,dstmax) < 0) {
+			printf("GET CONFIGURATION failed\n");
+			dev->dump_sense(stdout);
+			return false;
+		}
+
+		l = dev->read_buffer_data_length();
+		if (l == 0) return 0;
+		if (l > dstmax) return -1;
+		s = dev->read_buffer(l);
+		if (s == NULL) return -1;
+		memcpy(dst,s,l);
+		return (int)l;
+	}
+
+	return -1;
+}
+
 int get_configuration(void *dst,size_t dstmax,Jarch3Device *dev) {
 	unsigned char *p,*s;
 	size_t l;
@@ -1213,6 +1250,22 @@ int main(int argc,char **argv) {
 
 			s += len;
 		}
+	}
+	else if (config.command == "get-capacity") {
+		unsigned char buffer[256];
+		int rd,i;
+
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=get_capacity(buffer,sizeof(buffer),device)) < 0) printf(" OK\n");
+
+		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
+		printf("\n");
+
+		printf("LBA=%u BlockLength=%u\n",
+			((unsigned int)buffer[0] << 24) + ((unsigned int)buffer[1] << 16) + 
+			((unsigned int)buffer[2] <<  8) + ((unsigned int)buffer[3] <<  0),
+			((unsigned int)buffer[4] << 24) + ((unsigned int)buffer[5] << 16) + 
+			((unsigned int)buffer[6] <<  8) + ((unsigned int)buffer[7] <<  0));
 	}
 
 	/* we're finished with the device */
