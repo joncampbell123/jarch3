@@ -454,7 +454,6 @@ Jarch3Device *Jarch3Driver_Linux_SG::open(const char *dev,Jarch3Configuration UN
 	if (!devobj->open()) {
 		fprintf(stderr,"Linux_SG: %s failed to open\n",dev);
 		devobj->release();
-		delete devobj;
 		return NULL;
 	}
 
@@ -641,11 +640,10 @@ Jarch3Driver *Jarch3GetDriver(string &driver,string UNUSED &device,Jarch3Configu
 		ret = new Jarch3Driver_Linux_SG();
 
 	if (ret != NULL) {
-		if (ret->addref() == 1) {
-			if (!ret->init()) {
-				ret->release();
-				ret = NULL;
-			}
+		ret->addref();
+		if (!ret->init()) {
+			ret->release();
+			ret = NULL;
 		}
 	}
 
@@ -1316,6 +1314,7 @@ int main(int argc,char **argv) {
 	device = driver->open(config.device.c_str(),&config);
 	if (device == NULL) {
 		fprintf(stderr,"Failed to open device %s\n",config.device.c_str());
+		driver->release();
 		return 1;
 	}
 
