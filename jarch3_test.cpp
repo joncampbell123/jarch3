@@ -675,6 +675,7 @@ static void help() {
 	fprintf(stderr,"    pause-audio       Pause CD playback\n");		/* DONE */
 	fprintf(stderr,"    resume-audio      Pause CD playback\n");		/* DONE */
 	fprintf(stderr,"    mode-sense        MODE SENSE\n");			/* DONE */
+	fprintf(stderr,"    get-config        GET CONFIGURATION\n");		/* DONE */
 	fprintf(stderr,"\n");
 	fprintf(stderr,"Driver: linux_sg\n");
 	fprintf(stderr,"   Valid devices are of the form /dev/sr0, /dev/sr1, etc...\n");
@@ -906,6 +907,43 @@ bool play_audio(Jarch3Device *dev,unsigned long sector) {
 	return false;
 }
 
+int get_configuration(void *dst,size_t dstmax,Jarch3Device *dev) {
+	unsigned char *p,*s;
+	size_t l;
+
+	dev->clear_data();
+	dev->clear_sense();
+	dev->clear_command();
+	p = dev->write_command(10);
+	if (p != NULL) {
+		p[0] = 0x46;		/* GET CONFIGURATION */
+		p[1] = 0x00;		/* RT=0 */
+		p[2] = 0x00;		/* Starting feature number==0 */
+		p[3] = 0x00;		/* ditto */
+		p[4] = 0;
+		p[5] = 0;
+		p[6] = 0;
+		p[7] = dstmax >> 8;
+		p[8] = dstmax;
+		p[9] = 0;
+		if (dev->do_scsi(Jarch3Device::DirToHost,dstmax) < 0) {
+			printf("GET CONFIGURATION failed\n");
+			dev->dump_sense(stdout);
+			return false;
+		}
+
+		l = dev->read_buffer_data_length();
+		if (l == 0) return 0;
+		if (l > dstmax) return -1;
+		s = dev->read_buffer(l);
+		if (s == NULL) return -1;
+		memcpy(dst,s,l);
+		return (int)l;
+	}
+
+	return -1;
+}
+
 int read_subchannel_curpos(void *dst,size_t dstmax,Jarch3Device *dev,unsigned char MSF,unsigned char SUBQ) {
 	unsigned char *p,*s;
 	size_t l;
@@ -1083,6 +1121,69 @@ int main(int argc,char **argv) {
 		printf("INDEX=%u\n",buffer[7]);
 		printf("Absolute CD address M:S:F: %02u:%02u:%02u:%02u\n",buffer[8],buffer[9],buffer[10],buffer[11]);
 		printf("Relative CD address M:S:F: %02u:%02u:%02u:%02u\n",buffer[12],buffer[13],buffer[14],buffer[15]);
+	}
+	else if (config.command == "get-config") {
+		unsigned char buffer[16384],*s,*f;
+		int rd,i;
+
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=get_configuration(buffer,sizeof(buffer),device)) < 0) printf(" OK\n");
+
+		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
+		printf("\n");
+
+		/* NTS: Data Length field @0 is 32-bit wide and contains the length of data following the field.
+		 *      Typically that means a total response of 424 bytes has a Data Length field of 420 */
+		printf("Feature header: datalen=%u (when returned %u) current_profile=0x%04x\n",
+			((unsigned int)buffer[0] << 24) + ((unsigned int)buffer[1] << 16) +
+			((unsigned int)buffer[2] <<  8) + ((unsigned int)buffer[3]),
+			rd,((unsigned int)buffer[6] << 8) + ((unsigned int)buffer[7]));
+
+		s = buffer+8;
+		f = buffer+rd;
+		while ((s+4) <= f) {
+			unsigned int fcode,len;
+
+			len = s[3];
+			fcode = ((unsigned int)s[0] << 8) + ((unsigned int)s[1]);
+			printf("  Feature 0x%04x ver=%u persist=%u current=%u additional_length=%u",
+				fcode,(s[2] >> 2) & 0xF,(s[2] >> 1) & 1,(s[2] >> 0) & 1,len);
+			switch (fcode) {
+				case 0x0000:	printf(" Profile List"); break;
+				case 0x0001:	printf(" Core"); break;
+				case 0x0002:	printf(" Morphing"); break;
+				case 0x0003:	printf(" Removable Medium"); break;
+				case 0x0004:	printf(" Write Protect"); break;
+				case 0x0010:	printf(" Random Readable"); break;
+				case 0x001D:	printf(" Multi-Read"); break;
+				case 0x001E:	printf(" CD Read"); break;
+				case 0x001F:	printf(" DVD Read"); break;
+				case 0x0020:	printf(" Random Writeable"); break;
+				case 0x0021:	printf(" Incremental Streaming Writeable"); break;
+				case 0x0022:	printf(" Legacy (Sector Eraseable Feature)"); break;
+				case 0x0023:	printf(" Formattable"); break;
+				case 0x0024:	printf(" Hardware Defect Management"); break;
+				case 0x0025:	printf(" Write Once"); break;
+				case 0x0026:	printf(" Restricted Overwrite"); break;
+				case 0x0027:	printf(" CD-RW CAV Write"); break;
+				case 0x0028:	printf(" MRW"); break;
+				case 0x0029:	printf(" Enhanced Defect Reporting"); break;
+				case 0x002A:	printf(" DVD+RW"); break;
+				case 0x002B:	printf(" DVD+R"); break;
+				case 0x002C:	printf(" Rigid Restricted Overwrite"); break;
+				case 0x002D:	printf(" CD Track at Once"); break;
+				case 0x002E:	printf(" CD Mastering"); break;
+				case 0x002F:	printf(" DVD-R/-RW Write"); break;
+				case 0x0033:	printf(" Layer Jump Recording"); break;
+				case 0x0034:	printf(" LJ Rigid Restricted Overwrite"); break;
+				/* TODO: Copy down more values from MMC-6 document */
+			};
+			printf("\n");
+			s += 4;
+			if ((s+len) > f) break;
+
+			s += len;
+		}
 	}
 
 	/* we're finished with the device */
