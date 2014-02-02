@@ -907,6 +907,82 @@ bool play_audio(Jarch3Device *dev,unsigned long sector) {
 	return false;
 }
 
+int read10(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned int sects) {
+	unsigned char *p,*s;
+	size_t l;
+
+	dev->clear_data();
+	dev->clear_sense();
+	dev->clear_command();
+	p = dev->write_command(10);
+	if (p != NULL) {
+		p[0] = 0x28;		/* READ(10) */
+		p[1] = 0x00;		/* RT=0 */
+		p[2] = (lba >> 24);
+		p[3] = (lba >> 16);
+		p[4] = (lba >> 8);
+		p[5] = lba;
+		p[6] = 0;
+		p[7] = sects >> 8;
+		p[8] = sects;
+		p[9] = 0;
+		if (dev->do_scsi(Jarch3Device::DirToHost,dstmax) < 0) {
+			printf("READ(10) failed\n");
+			dev->dump_sense(stdout);
+			return false;
+		}
+
+		l = dev->read_buffer_data_length();
+		if (l == 0) return 0;
+		if (l > dstmax) return -1;
+		s = dev->read_buffer(l);
+		if (s == NULL) return -1;
+		memcpy(dst,s,l);
+		return (int)l;
+	}
+
+	return -1;
+}
+
+int read12(void *dst,size_t dstmax,Jarch3Device *dev,unsigned long lba,unsigned int sects) {
+	unsigned char *p,*s;
+	size_t l;
+
+	dev->clear_data();
+	dev->clear_sense();
+	dev->clear_command();
+	p = dev->write_command(12);
+	if (p != NULL) {
+		p[0] = 0xA8;		/* READ(12) */
+		p[1] = 0x00;		/* RT=0 */
+		p[2] = (lba >> 24);
+		p[3] = (lba >> 16);
+		p[4] = (lba >> 8);
+		p[5] = lba;
+		p[6] = sects >> 24;
+		p[7] = sects >> 16;
+		p[8] = sects >> 8;
+		p[9] = sects;
+		p[10] = 0;
+		p[11] = 0;
+		if (dev->do_scsi(Jarch3Device::DirToHost,dstmax) < 0) {
+			printf("READ(12) failed\n");
+			dev->dump_sense(stdout);
+			return false;
+		}
+
+		l = dev->read_buffer_data_length();
+		if (l == 0) return 0;
+		if (l > dstmax) return -1;
+		s = dev->read_buffer(l);
+		if (s == NULL) return -1;
+		memcpy(dst,s,l);
+		return (int)l;
+	}
+
+	return -1;
+}
+
 int get_capacity(void *dst,size_t dstmax,Jarch3Device *dev) {
 	unsigned char *p,*s;
 	size_t l;
@@ -1266,6 +1342,38 @@ int main(int argc,char **argv) {
 			((unsigned int)buffer[2] <<  8) + ((unsigned int)buffer[3] <<  0),
 			((unsigned int)buffer[4] << 24) + ((unsigned int)buffer[5] << 16) + 
 			((unsigned int)buffer[6] <<  8) + ((unsigned int)buffer[7] <<  0));
+	}
+	else if (config.command == "read-10") {
+		unsigned char buffer[2048];
+		int rd,i;
+
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=read10(buffer,sizeof(buffer),device,config.sector,1)) < 0) printf(" OK\n");
+
+		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
+		printf("\n");
+
+		for (i=0;i < rd;i++) {
+			if (buffer[i] >= 32 && buffer[i] < 127) printf("%c",buffer[i]);
+			else printf(".");
+		}
+		printf("\n");
+	}
+	else if (config.command == "read-12") {
+		unsigned char buffer[2048];
+		int rd,i;
+
+		if (test_unit_ready(device)) printf("Test unit ready OK\n");
+		if ((rd=read12(buffer,sizeof(buffer),device,config.sector,1)) < 0) printf(" OK\n");
+
+		for (i=0;i < rd;i++) printf("0x%02x ",buffer[i]);
+		printf("\n");
+
+		for (i=0;i < rd;i++) {
+			if (buffer[i] >= 32 && buffer[i] < 127) printf("%c",buffer[i]);
+			else printf(".");
+		}
+		printf("\n");
 	}
 
 	/* we're finished with the device */
