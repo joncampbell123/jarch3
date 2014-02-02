@@ -17,7 +17,9 @@
 
 #include <string>
 
+#ifndef UNUSED
 #define UNUSED __attribute__((unused))
+#endif
 
 /* Fuck you Linux headers. Put the useful #defines we actually need here */
 #ifndef SG_FLAG_DIRECT_IO
