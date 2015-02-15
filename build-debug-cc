@@ -1,0 +1,11 @@
+#!/bin/bash
+./cleantree
+./autogen.sh
+./configure --prefix=/usr --enable-debug-cc || exit 1
+
+if [[ x"$JSW" == x ]]; then
+	JSW=`grep processor /proc/cpuinfo | wc -l`
+	JSW=-j$(($JSW*2))
+fi
+make $JSW || exit 1
+
